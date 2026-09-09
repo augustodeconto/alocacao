@@ -69,19 +69,20 @@
 * { box-sizing: border-box; }
 body {
   margin: 0; color: var(--fg); background: var(--bg); font-size: 13px;
-  height: 100vh; display: flex; flex-direction: column;
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden;
   --treecol-w: 280px;
 }
 button { color: inherit; }
 
 /* ================= shell ================= */
 #app {
-  flex: 1 1 auto; min-height: 0;
+  flex: 1 1 auto; min-height: 0; overflow: hidden;
   display: grid;
   grid-template-columns: 46px var(--sb-w, 232px) 1fr auto;
   --sb-w: 232px;
   --sec-w: 300px;
 }
+#app > * { min-height: 0; }
 #app.sb-collapsed { --sb-w: 0px; }
 #app.sb-collapsed #sidebar { border-right: 0; }
 
@@ -97,8 +98,9 @@ button { color: inherit; }
 #rail {
   background: var(--rail-bg); color: var(--rail-fg);
   display: flex; flex-direction: column; align-items: center;
-  padding: 6px 0; gap: 3px;
+  padding: 6px 0; gap: 3px; overflow: hidden;
 }
+.rail-gap { flex: 0 0 auto; height: 10px; }
 .rail-btn {
   width: 36px; height: 36px; border: 0; background: transparent;
   color: var(--rail-fg); border-radius: 8px; cursor: pointer;
@@ -146,8 +148,8 @@ button { color: inherit; }
   padding: 10px 12px; color: var(--muted); font-size: 11.5px; line-height: 1.5;
 }
 
-#main { display: flex; flex-direction: column; min-width: 0; }
-.view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.view { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .view[hidden] { display: none; }
 
 #secondary {
@@ -361,7 +363,7 @@ td.cell input {
 #cad-toolbar .cad-tabs button.on { background: var(--panel); color: var(--fg); font-weight: 500; }
 #cad-toolbar input[type="search"] { min-width: 200px; }
 #cad-toolbar .cad-hint { color: var(--muted); }
-.cad-scroll { flex: 1 1 auto; overflow: auto; padding: 0 0 40vh; }
+.cad-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 0 40vh; }
 #cad-tabela { border-collapse: collapse; width: 100%; }
 #cad-tabela thead th {
   position: sticky; top: 0; z-index: 2; background: var(--head-bg);
@@ -393,7 +395,7 @@ td.cell input {
 .cat-card li span { color: var(--muted); }
 
 /* ================= versões view ================= */
-.ver-scroll { flex: 1 1 auto; overflow: auto; padding: 16px; }
+.ver-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px; }
 .ver-row {
   display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
   padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
