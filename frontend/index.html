@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Planejamento de Alocação</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<div id="app">
+  <!-- activity rail -->
+  <nav id="rail" aria-label="Seções">
+    <button class="rail-btn" data-view="alloc" title="Alocação">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/></svg>
+    </button>
+    <button class="rail-btn" data-view="cad" title="Cadastros">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+    </button>
+    <button class="rail-btn" data-view="ver" title="Versões">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M6 8.4v7.2M8.2 6.6c6 0 3.8 5.4 7.6 5.4"/></svg>
+    </button>
+    <button id="rail-sb" class="rail-btn" title="mostrar / esconder a barra lateral">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16" fill="currentColor"/></svg>
+    </button>
+    <span class="rail-spacer"></span>
+    <button id="rail-files" class="rail-btn" title="Arquivos — importar / exportar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5 12 11l2.5 2.5"/></svg>
+    </button>
+    <button id="rail-theme" class="rail-btn" title="Tema: automático">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 4v16" fill="currentColor"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
+    </button>
+  </nav>
+
+  <!-- primary sidebar -->
+  <aside id="sidebar">
+    <div class="sb-head">
+      <span>Apontamento</span>
+      <button id="sb-collapse" title="recolher a barra">‹</button>
+    </div>
+    <div class="sb-group">
+      <div class="sb-label">Alocação</div>
+      <button class="sb-item" data-view="alloc">Planejamento</button>
+    </div>
+    <div class="sb-group">
+      <div class="sb-label">Cadastros</div>
+      <button class="sb-item" data-view="cad" data-tab="projetos">Projetos</button>
+      <button class="sb-item" data-view="cad" data-tab="pessoas">Recursos</button>
+      <button class="sb-item" data-view="cad" data-tab="catalogo">Catálogo</button>
+    </div>
+    <div class="sb-group">
+      <div class="sb-label">Versões</div>
+      <button class="sb-item" data-view="ver">Linha principal</button>
+    </div>
+    <div class="sb-foot" id="sb-status"></div>
+    <div class="wsplit" id="sb-resize" title="arraste para redimensionar"></div>
+  </aside>
+
+  <!-- center workspace -->
+  <main id="main">
+    <section id="view-alloc" class="view">
+      <div id="toolbar">
+        <div class="tb-group">
+          <button class="sq" id="btn-undo" title="desfazer edição (Ctrl+Z)">↶</button>
+          <button class="sq" id="btn-redo" title="refazer (Ctrl+Y)">↷</button>
+          <button class="sq" id="btn-back" title="voltar à seleção anterior">←</button>
+          <button class="sq" id="btn-fwd" title="avançar seleção">→</button>
+          <button class="sq" id="syncmode" title="sincronia de seleção entre as grades">↓↑</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <select id="gp-filter" title="filtrar projetos por Gestor de Projetos">
+            <option value="">Todos os GPs</option>
+          </select>
+          <button id="btn-showall" title="mostrar também projetos/pessoas sem alocação futura">só ativos</button>
+        </div>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="btn-unidade">Exibir: Horas</button>
+          <button id="btn-hoje" class="mini" title="rolar até o mês atual">⊙ hoje</button>
+        </div>
+        <span class="tb-spacer"></span>
+        <span class="status" id="proj-status"></span>
+      </div>
+
+      <div class="panels">
+        <div class="panel-wrap" id="wrap-projeto">
+          <div class="panel-title">Por Projeto
+            <span class="hint">projeto → tipo · pessoa</span>
+            <span class="pt-actions">
+              <button data-grid="projeto" data-act="collapse" title="recolher tudo">⊟</button>
+              <button data-grid="projeto" data-act="expand" title="expandir tudo">⊞</button>
+            </span>
+          </div>
+          <div class="panel" id="panel-projeto">
+            <table class="grid" id="grid-projeto"></table>
+          </div>
+        </div>
+        <div class="divider" id="divider" title="arraste para redistribuir"></div>
+        <div class="panel-wrap" id="wrap-recurso">
+          <div class="panel-title">Por Recurso
+            <span class="hint">pessoa → projeto / equipe · total vs. capacidade</span>
+            <span class="pt-actions">
+              <button data-grid="recurso" data-act="collapse" title="recolher tudo">⊟</button>
+              <button data-grid="recurso" data-act="expand" title="expandir tudo">⊞</button>
+            </span>
+          </div>
+          <div class="panel" id="panel-recurso">
+            <table class="grid" id="grid-recurso"></table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-cad" class="view" hidden>
+      <div id="cad-toolbar">
+        <div class="cad-tabs">
+          <button data-tab="projetos" class="on">Projetos</button>
+          <button data-tab="pessoas">Recursos</button>
+          <button data-tab="catalogo">Catálogo</button>
+        </div>
+        <input id="cad-busca" type="search" placeholder="filtrar…" />
+        <button id="cad-novo">＋ Novo projeto</button>
+        <span class="cad-hint" id="cad-hint"></span>
+      </div>
+      <div class="cad-scroll">
+        <table id="cad-tabela"><thead></thead><tbody></tbody></table>
+        <div id="cad-catalogo" hidden></div>
+      </div>
+    </section>
+
+    <section id="view-ver" class="view" hidden>
+      <div id="ver-toolbar">
+        <button id="ver-descartar-tudo" title="descartar TODAS as mudanças (volta à baseline)">↺ Descartar tudo</button>
+        <span class="tb-spacer"></span>
+        <span class="status" id="ver-status"></span>
+      </div>
+      <div class="ver-scroll" id="ver-body"></div>
+    </section>
+  </main>
+
+  <!-- right secondary sidebar (rail + painel) -->
+  <aside id="secondary" hidden>
+    <nav id="sec-rail" aria-label="Painéis">
+      <button class="secrail-btn" data-panel="custo" title="Custo do projeto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M8 7h5.5a2.5 2.5 0 0 1 0 5H8m0 0h6.5a2.5 2.5 0 0 1 0 5H7"/></svg>
+      </button>
+    </nav>
+    <div id="sec-panel" hidden>
+      <div class="wsplit" id="sec-resize" title="arraste para redimensionar"></div>
+      <div class="sec-head">
+        <span id="sec-title">Painel</span>
+        <button id="sec-close" title="fechar painel">✕</button>
+      </div>
+      <div class="sec-body" id="sec-body"></div>
+    </div>
+  </aside>
+</div>
+
+<div id="log"></div>
+
+<dialog id="dlg-novo">
+  <h3>Novo projeto</h3>
+  <div class="body">
+    <label>Id_projeto</label><input id="np-id" />
+    <label>Nome</label><input id="np-nome" />
+    <label>Empresa</label><input id="np-empresa" />
+    <label>Status</label><input id="np-status" />
+    <label>Matrícula GP</label><input id="np-gp" />
+    <label>ID Filial</label><input id="np-filial" type="number" value="62" />
+    <label>Mês início</label><input id="np-mes" type="number" min="1" max="12" value="1" />
+    <label>Ano início</label><input id="np-ano" type="number" value="2026" />
+    <label>Qtde. de meses</label><input id="np-meses" type="number" min="1" value="10" />
+  </div>
+  <div class="actions">
+    <button value="cancel">Cancelar</button>
+    <button class="primary" id="np-ok">Criar</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-export">
+  <h3>Exportar projetos</h3>
+  <div class="body" id="ex-body"></div>
+  <div class="actions">
+    <button value="cancel">Cancelar</button>
+    <button class="primary" id="ex-ok">Baixar</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-aloc">
+  <h3>Adicionar alocação</h3>
+  <div class="body" id="da-body"></div>
+  <div class="actions">
+    <button value="cancel">Cancelar</button>
+    <button class="primary" id="da-ok">Adicionar</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-arquivos">
+  <h3>Arquivos</h3>
+  <div class="body arq" id="arq-body">
+    <section>
+      <h4>Importar</h4>
+      <p class="muted">Planilha de projeto ou extrato do BI — cada arquivo é classificado e roteado.</p>
+      <button id="arq-import" class="primary">Escolher arquivos .xlsx…</button>
+      <div id="arq-log"></div>
+    </section>
+    <section>
+      <h4>Exportar</h4>
+      <p class="muted">Gera os .xlsx no padrão do template, com início e seleção configuráveis.</p>
+      <button id="arq-export">Exportar projetos…</button>
+    </section>
+  </div>
+  <div class="actions">
+    <button value="cancel">Fechar</button>
+  </div>
+</dialog>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
