@@ -82,20 +82,27 @@ inicio_contrato, fim_contrato, formacao, id_filial, carga_diaria, capacidade_men
 remuneracao, inicio_vigencia, ativo`), `catalogo` (`tipo`, `id`, `texto`), `anotacao`
 (notas na grade — nunca voltam pro `.xlsx`), `preferencias`.
 
-### Versionamento (baseline por projeto)
-`baseline_meta` + `baseline_alocacao` / `baseline_alocacao_mes` (snapshot da alocação) +
-**`baseline_pessoa`** (snapshot dos campos de cada pessoa alocada no projeto) +
-**`baseline_projeto`** (snapshot dos campos de `dados_projeto`). Capturados na importação e
-na exportação (export = commit). O export sai **do diff** contra essas baselines:
-- alocação sumida → linha zerada; nunca-na-baseline e removida → não sai.
-- pessoa nova/alterada → linha em `Novos_Pesquisadores`.
-- campos do projeto → reescritos em `dados_projeto` (hoje sempre reescreve do banco).
+### Versionamento estilo Git (`user_version = 2`)
 
-**Futuro (whole-DB Git):** generalizar as `baseline_*` para `commit_*` chaveadas por
-`commit_id`, com grafo `commit(commit_id, parent, autor, rotulo)` + `ref(nome → commit_id)`
-(branches: "principal", "cenario-X"). Working = tabelas atuais. commit = snapshot; branch =
-nova ref; checkout = carrega um commit no working; merge = diff + aplica. Snapshot completo
-por commit (não delta) — volume pequeno.
+Grafo global de commits (um snapshot do plano inteiro por commit). Detalhe e desvios em
+[`docs/VERSIONAMENTO.md`](VERSIONAMENTO.md); módulo `backend/app/versao.py`.
+
+- **Grafo:** `commit_(commit_id, parent_id, merge_parent_id, autor, mensagem, criado_em,
+  origem)`, `ref_(nome → commit_id)` (`main` + branches de cenário), `head_` (branch
+  check-outada + commit-base).
+- **Delta por commit:** `chg_projeto` / `chg_pessoa` / `chg_alocacao` / `chg_alocacao_mes` /
+  `chg_projeto_periodo` — só as linhas que mudaram vs. o 1º pai; chave natural; `deleted=1`
+  = lápide. Materializar um commit = caminhar `parent_id` até a raiz, mais-recente vence.
+- **Cache do HEAD** (o que a tela e o `commit` comparam contra o working):
+  `baseline_alocacao` / `baseline_alocacao_mes` + `base_projeto` / `base_pessoa` /
+  `base_projeto_periodo`.
+- **Operações (Fase 1):** `commit` (working → novo commit, avança a ref), `checkout`
+  (materializa working+cache; exige working limpo), `descartar` (working := HEAD; parcial
+  por projeto), `branch`, `log`. **Merge = Fase 2** (o esquema já tem o 2º pai).
+- **Import e export não commitam** — deixam mudanças pendentes. O rebuild do BI move o
+  cache e registra **um** commit `origem='bi'`.
+- O export continua saindo **do diff working × HEAD**: alocação sumida → linha zerada;
+  nunca-no-HEAD e ausente → não sai; pessoa alterada → `Novos_Pesquisadores`.
 
 Esquema completo em `backend/app/db.py`.
 
@@ -409,6 +416,15 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-09** — **Versionamento estilo Git no banco (`user_version = 2`).** Grafo global
+  de commits (`commit_` / `ref_` / `head_`) + delta por commit (`chg_*`, chave natural,
+  lápide). Cache do HEAD = `baseline_alocacao*` + `base_projeto` / `base_pessoa` /
+  `base_projeto_periodo`; `baseline_meta` / `baseline_pessoa` / `baseline_projeto` removidas.
+  Módulo `app/versao.py`: `commit` / `checkout` / `descartar` / `branch` / `log` (Fase 1;
+  merge = Fase 2). Import e export **deixaram de commitar** — mudanças ficam pendentes até
+  `POST /api/versao/commit`; rebuild do BI registra um commit `origem='bi'`. Endpoints
+  `/api/versao/*`; `/api/estado` ganhou o bloco `versao`; `marcar-baseline` removido.
+  Pasta do projeto renomeada `apontamento` → `alocacao`. Ver `docs/VERSIONAMENTO.md`.
 - **2026-09-09** — **Banco não guarda alocação zerada.** `alocacao_mes` /
   `baseline_alocacao_mes` só têm `horas > 0`; ausência de linha == `0`. Limpar célula
   → `DELETE` do mês; zerar a linha toda → `alocacao` some do working (e sai zerada no

@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db as dbmod
+from . import versao
 from .aggregate import build_grade
 from .templates import ensure_template
 from .xlsx_export import exportar_projeto, nome_arquivo_projeto
@@ -42,21 +43,8 @@ _conn = dbmod.init_db()
 _lock = threading.RLock()
 
 
-def _backfill_baseline() -> None:
-    """Projetos importados antes do versionamento: o estado atual vira a linha de base.
-    Projetos que já tinham baseline de alocação ganham o snapshot de pessoa/projeto
-    sem mexer no baseline de alocação (não perde diffs pendentes)."""
-    from . import baseline
-
-    for r in _conn.execute("SELECT projeto_id FROM projeto").fetchall():
-        pid = r["projeto_id"]
-        if not _conn.execute("SELECT 1 FROM baseline_meta WHERE projeto_id=?", (pid,)).fetchone():
-            baseline.capturar(_conn, pid, "import")
-        elif not _conn.execute("SELECT 1 FROM baseline_projeto WHERE projeto_id=?", (pid,)).fetchone():
-            baseline.backfill_extras(_conn, pid)
-
-
-_backfill_baseline()
+versao.garantir_inicializado(_conn)
+_conn.commit()
 
 app = FastAPI(title="Planejamento de Alocação")
 
@@ -101,6 +89,7 @@ def _estado() -> dict:
         "grade": _grade(),
         "catalogos": _catalogos(),
         "pessoas": _pessoas(),
+        "versao": versao.estado_repo(_conn),
     }
 
 
@@ -542,45 +531,33 @@ def remover_alocacao(alocacao_id: int):
 
 @app.post("/api/projetos/{projeto_id}/descartar")
 def descartar_projeto(projeto_id: int):
-    """Descarta as mudanças do projeto: working volta a ser a baseline."""
-    from . import baseline
-
+    """Descarta as mudanças de alocação/janela do projeto (working := HEAD)."""
     with _lock:
         if not _conn.execute("SELECT 1 FROM projeto WHERE projeto_id=?", (projeto_id,)).fetchone():
             raise HTTPException(404, "projeto não encontrado")
-        baseline.restaurar_working(_conn, projeto_id)
+        versao.descartar(_conn, projeto_id)
         return {"estado": _estado()}
 
 
 @app.post("/api/descartar-tudo")
 def descartar_tudo():
-    """Descarta as mudanças de TODOS os projetos (working := baseline)."""
-    from . import baseline
-
+    """reset --hard: working := HEAD (descarta TODAS as mudanças pendentes)."""
     with _lock:
-        for r in _conn.execute("SELECT projeto_id FROM baseline_meta").fetchall():
-            baseline.restaurar_working(_conn, r["projeto_id"])
+        versao.descartar(_conn)
         return {"estado": _estado()}
 
 
 @app.post("/api/projetos/{projeto_id}/marcar-baseline")
-def marcar_baseline(projeto_id: int):
-    """Define a linha de base = estado atual do projeto (descarta o diff pendente).
-    Útil depois de mexer bastante e querer 'começar limpo' nesta sessão."""
-    from . import baseline
-
-    with _lock:
-        if not _conn.execute("SELECT 1 FROM projeto WHERE projeto_id=?", (projeto_id,)).fetchone():
-            raise HTTPException(404, "projeto não encontrado")
-        baseline.capturar(_conn, projeto_id, "manual")
-        return {"estado": _estado()}
+def marcar_baseline_removido(projeto_id: int):
+    """Removido: commits agora são globais. Use POST /api/versao/commit."""
+    raise HTTPException(
+        409, "commits são globais agora — use POST /api/versao/commit "
+             "(ou POST /api/projetos/{id}/descartar para reverter só este projeto)")
 
 
 @app.post("/api/projetos/{projeto_id}/restaurar-alocacao")
-def restaurar_alocacao(projeto_id: int, payload: dict = Body(...)):
-    """Desfaz uma remoção: recria a alocação com os valores da linha de base."""
-    from . import baseline
-
+def restaurar_alocacao_endpoint(projeto_id: int, payload: dict = Body(...)):
+    """Desfaz uma remoção: recria a alocação com os valores do HEAD."""
     matricula = str(payload.get("matricula") or "").strip()
     tipo = str(payload.get("tipo_alocacao") or "").strip()
     with _lock:
@@ -589,15 +566,83 @@ def restaurar_alocacao(projeto_id: int, payload: dict = Body(...)):
             (projeto_id, matricula, tipo),
         ).fetchone()
         if not existe:
-            raise HTTPException(404, "essa alocação não está na linha de base")
+            raise HTTPException(404, "essa alocação não está no HEAD")
         if _conn.execute(
             "SELECT 1 FROM alocacao WHERE projeto_id=? AND matricula=? AND tipo_alocacao=?",
             (projeto_id, matricula, tipo),
         ).fetchone():
             raise HTTPException(409, "alocação já existe")
-        baseline.restaurar(_conn, projeto_id, matricula, tipo)
+        versao.restaurar_alocacao(_conn, projeto_id, matricula, tipo)
         _touch_projeto(projeto_id)
         _conn.commit()
+        return {"estado": _estado()}
+
+
+# -- versionamento (branch / commit / checkout / log) ------------------
+@app.get("/api/versao/estado")
+def versao_estado():
+    with _lock:
+        return versao.estado_repo(_conn)
+
+
+@app.get("/api/versao/log")
+def versao_log(ref: str | None = None, limite: int = 100):
+    with _lock:
+        try:
+            return {"commits": versao.log(_conn, ref, limite)}
+        except KeyError:
+            raise HTTPException(404, f"branch '{ref}' não existe")
+
+
+@app.post("/api/versao/commit")
+def versao_commit(payload: dict = Body(...)):
+    msg = str(payload.get("mensagem") or "").strip()
+    if not msg:
+        raise HTTPException(422, "mensagem do commit é obrigatória")
+    with _lock:
+        try:
+            cid = versao.commit(_conn, msg, autor=str(payload.get("autor") or "").strip())
+        except versao.NadaParaCommitar:
+            raise HTTPException(409, "nada para commitar")
+        return {"commit_id": cid, "estado": _estado()}
+
+
+@app.post("/api/versao/branch")
+def versao_branch(payload: dict = Body(...)):
+    nome = str(payload.get("nome") or "").strip()
+    with _lock:
+        try:
+            versao.branch(_conn, nome, a_partir=payload.get("a_partir"),
+                          trocar=bool(payload.get("trocar")))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except KeyError as e:
+            raise HTTPException(404, f"branch {e} não existe")
+        return {"estado": _estado()}
+
+
+@app.post("/api/versao/checkout")
+def versao_checkout(payload: dict = Body(...)):
+    ref = str(payload.get("ref") or "").strip()
+    with _lock:
+        try:
+            versao.checkout(_conn, ref)
+        except versao.VersaoSuja as e:
+            raise HTTPException(409, str(e))
+        except KeyError:
+            raise HTTPException(404, f"branch '{ref}' não existe")
+        return {"estado": _estado()}
+
+
+@app.delete("/api/versao/branch/{nome}")
+def versao_deletar_branch(nome: str):
+    with _lock:
+        try:
+            versao.deletar_branch(_conn, nome)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except KeyError:
+            raise HTTPException(404, f"branch '{nome}' não existe")
         return {"estado": _estado()}
 
 

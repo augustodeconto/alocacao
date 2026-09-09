@@ -1,3 +1,4 @@
+from app import versao
 from app.aggregate import build_grade, cor_pessoa_mes
 from app.xlsx_import import import_workbook
 
@@ -40,6 +41,7 @@ def test_grade_agrupada_por_tipo(conn, sample_path):
 
 def test_grade_marca_alteracao_vs_baseline(conn, sample_path):
     import_workbook(conn, sample_path)
+    versao.commit(conn, "importa amostra")     # HEAD = estado do arquivo
     aid = conn.execute(
         "SELECT alocacao_id FROM alocacao WHERE matricula='73920' AND tipo_alocacao='TecnicaANP'"
     ).fetchone()["alocacao_id"]

@@ -1,5 +1,5 @@
-"""Tabela única `pessoa` + aba Novos_Pesquisadores gerada do diff vs. baseline."""
-from app import baseline
+"""Tabela única `pessoa` + aba Novos_Pesquisadores gerada do diff vs. HEAD."""
+from app import versao
 from app.xlsx_export import exportar_projeto
 from app.xlsx_import import import_workbook
 from app.xlsx_io import Workbook
@@ -33,6 +33,7 @@ def test_novos_pesquisadores_vai_para_pessoa(conn, sample_path):
 
 def test_export_novos_sai_do_diff(conn, tmp_path, sample_path):
     import_workbook(conn, sample_path)
+    versao.commit(conn, "importa amostra")           # HEAD passa a conter tudo
 
     # sem mudanças -> aba Novos_Pesquisadores vazia
     out1 = exportar_projeto(conn, 1, str(tmp_path / "a"), sample_path)
@@ -49,18 +50,23 @@ def test_export_novos_sai_do_diff(conn, tmp_path, sample_path):
     rows = _novos_rows(out2)
     assert len(rows) == 1 and str(rows[0][0]) == mat
 
-    # export = commit -> baseline avança -> volta a ficar vazia
+    # commit -> HEAD avança -> volta a ficar vazia
+    versao.commit(conn, "ajusta carga")
     out3 = exportar_projeto(conn, 1, str(tmp_path / "c"), sample_path)
     assert _novos_rows(out3) == []
 
 
-def test_baseline_captura_pessoa_e_projeto(conn, sample_path):
+def test_head_tem_pessoa_e_projeto(conn, sample_path):
     import_workbook(conn, sample_path)
-    n_pessoa = conn.execute("SELECT COUNT(*) c FROM baseline_pessoa WHERE projeto_id=1").fetchone()["c"]
+    versao.commit(conn, "importa amostra")
+    n_pessoa = conn.execute(
+        """SELECT COUNT(*) c FROM base_pessoa
+           WHERE matricula IN (SELECT matricula FROM alocacao WHERE projeto_id=1)"""
+    ).fetchone()["c"]
     n_aloc_pessoas = conn.execute(
         "SELECT COUNT(DISTINCT matricula) c FROM alocacao WHERE projeto_id=1"
     ).fetchone()["c"]
     assert n_pessoa == n_aloc_pessoas
-    bp = conn.execute("SELECT * FROM baseline_projeto WHERE projeto_id=1").fetchone()
+    bp = conn.execute("SELECT * FROM base_projeto WHERE projeto_id=1").fetchone()
     assert bp["nome"] == "OTIMIZEPLAN" and bp["mes_inicio"] == 5
-    assert baseline.pessoas_alteradas(conn, 1) == []
+    assert versao.pessoas_alteradas(conn, 1) == []

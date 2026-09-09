@@ -53,17 +53,27 @@ Frontend is vanilla ES modules, **no build step, no framework**: `main.js` (stat
 `grid-excel.js` (Excel-like cell selection/editing/undo/paste layer), `scroll-sync.js`,
 `api.js`.
 
-### The two data planes (Git-like versioning) — central concept
-- **working**: `projeto`, `pessoa`, `alocacao`, `alocacao_mes`, `projeto_periodo`. What the
-  user edits.
-- **`baseline_*`** (`baseline_meta/projeto/pessoa/alocacao/alocacao_mes`): the last "commit"
-  per project — a full snapshot, not deltas. Captured on import of a new project and on
-  every export (**export = commit**).
-- `backend/app/baseline.py`: `capturar` (snapshot working → baseline), `restaurar_working`
-  (discard: working := baseline), `removidas` (in baseline, gone from working → exported
-  zeroed as a "remove" signal), `pessoas_alteradas` (drives the `Novos_Pesquisadores` sheet).
-- All on-screen diff markers (corner triangles, "novo" band, strikethrough) and the export's
-  zeroed rows are computed as **working vs baseline**.
+### Git-style versioning (`user_version = 2`) — central concept
+Full detail + deviations in `docs/VERSIONAMENTO.md`. Module: `backend/app/versao.py`.
+- **working** (`projeto`, `pessoa`, `alocacao`, `alocacao_mes`, `projeto_periodo`) = the
+  materialized checkout + uncommitted edits. All editing endpoints touch only these.
+- **Commit graph** (global — one snapshot of the whole plan per commit): `commit_`
+  (`parent_id`, `merge_parent_id`), `ref_` (`main` + scenario branches), `head_`.
+- **Per-commit delta**: `chg_projeto/pessoa/alocacao/alocacao_mes/projeto_periodo` — only
+  rows that differ from the first parent, keyed by **natural key** (never `alocacao_id`);
+  `deleted=1` = tombstone. Materialize a commit = walk `parent_id` to root, nearest wins.
+- **HEAD cache** (what the screen diff and `commit` compare working against):
+  `baseline_alocacao` / `baseline_alocacao_mes` (kept) + `base_projeto` / `base_pessoa` /
+  `base_projeto_periodo` (global). `baseline_meta/pessoa/projeto` were dropped.
+- `versao.py`: `commit(msg)`, `checkout(ref)` (requires clean working), `descartar(projeto_id=None)`
+  (= `reset --hard`, partial if scoped), `branch`, `log`, `materializar`; plus `removidas`
+  / `pessoas_alteradas` / `restaurar_alocacao` used by the export. **Merge = phase 2**
+  (schema already carries the 2nd parent).
+- **Import and export do NOT commit** — they leave working dirty until an explicit
+  `POST /api/versao/commit`. The BI rebuild moves the cache and records one `origem='bi'`
+  commit via `versao.commit_transicao_cache`.
+- On-screen diff markers (triangles, "novo", strikethrough) and the export's zeroed rows
+  are computed as **working vs HEAD cache** (`aggregate.build_grade` reads `baseline_alocacao*`).
 
 ### `alocacao` vs `alocacao_mes`
 `alocacao` = the identity of one grid line: `(projeto_id, matricula, tipo_alocacao)` unique.
@@ -91,8 +101,8 @@ epoch 1899-12-30 (`serial_to_date` / `date_to_serial`).
 
 ### Three import paths (all via `POST /api/importar-upload`, routed by sheet content)
 1. **Per-project `.xlsx`** (`dados_projeto` + `Alocacao` + `Planilha4`) → `xlsx_import.py` →
-   updates **working only** (replaces that project's allocations; does NOT touch baseline).
-   Existing project → status `updated`; new project → `imported` + `baseline.capturar`.
+   updates **working only** (replaces that project's allocations). Never commits — status
+   `updated` (existing) or `imported` (new); the change stays pending until `versao.commit`.
 2. **BI extracts** → `bi_import.py`. BI is the **authority of the baseline**:
    `colabmescusto.xlsx` rebuilds `baseline_alocacao*` for all months (jan/2025→jun/2028) and
    derives `pessoa.valor_hora`; `colabs.xlsx` → `pessoa` fields; `projetos.xlsx` → `projeto`

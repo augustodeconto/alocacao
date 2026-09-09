@@ -50,22 +50,24 @@ def test_valor_hora_e_sobrescrita(conn, sample_path):
 
 
 def test_bi_monta_projetos_e_alocacao(conn, sample_path):
-    from app import baseline
+    from app import versao
 
     import_workbook(conn, sample_path)  # OTIMIZEPLAN já editável, com working
+    versao.commit(conn, "importa amostra")
     working_antes = conn.execute("SELECT COUNT(*) c FROM alocacao WHERE projeto_id=1").fetchone()["c"]
     importar_arquivos(conn, FILES)
 
     # muitos projetos no grid (não só o OTIMIZEPLAN)
     assert conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"] > 50
-    # projetos novos ganharam working = baseline
+    # projetos novos ganharam working = HEAD
     assert conn.execute("SELECT COUNT(DISTINCT projeto_id) c FROM alocacao").fetchone()["c"] > 20
-    # OTIMIZEPLAN manteve o working editado; baseline foi para o do BI
+    # OTIMIZEPLAN manteve o working editado; o HEAD foi para o do BI
     assert conn.execute("SELECT COUNT(*) c FROM alocacao WHERE projeto_id=1").fetchone()["c"] == working_antes
-    assert conn.execute("SELECT origem FROM baseline_meta WHERE projeto_id=1").fetchone()["origem"] == "bi"
+    log = versao.log(conn)
+    assert log[0]["origem"] == "bi"          # rebuild do BI registrou um commit
 
-    # descartar -> working volta a ser a baseline
-    baseline.restaurar_working(conn, 1)
+    # descartar -> working volta ao HEAD (que agora é o do BI)
+    versao.descartar(conn, 1)
     w = conn.execute("SELECT COUNT(*) c FROM alocacao WHERE projeto_id=1").fetchone()["c"]
     b = conn.execute("SELECT COUNT(*) c FROM baseline_alocacao WHERE projeto_id=1").fetchone()["c"]
     assert w == b

@@ -371,8 +371,8 @@ def exportar_projeto(
     # (sinaliza "remover" para o importador). Inclui o caso em que o usuário zerou
     # todos os meses da linha — a alocação some do working e reaparece aqui zerada.
     # Toda alocação presente no working é exportada, inclusive as novas.
-    from . import baseline
-    for rem in baseline.removidas(conn, projeto_id):
+    from . import versao
+    for rem in versao.removidas(conn, projeto_id):
         linhas.append({
             "matricula": rem["matricula"],
             "tipo_alocacao": rem["tipo_alocacao"],
@@ -381,8 +381,8 @@ def exportar_projeto(
         })
     linhas.sort(key=lambda l: (l["nome"].lower(), l["tipo_alocacao"].lower()))
 
-    # aba Novos_Pesquisadores = pessoas do projeto novas/alteradas vs. baseline
-    pessoas_novas = baseline.pessoas_alteradas(conn, projeto_id)
+    # aba Novos_Pesquisadores = pessoas do projeto novas/alteradas vs. HEAD
+    pessoas_novas = versao.pessoas_alteradas(conn, projeto_id)
 
     p0 = _dt.date.fromisoformat(periodos[0])
     pkg = _Package(base)
@@ -404,8 +404,8 @@ def exportar_projeto(
         (_dt.datetime.now().isoformat(timespec="seconds"), projeto_id),
     )
     conn.commit()
-    # export = commit: a baseline avança para o estado atual
-    baseline.capturar(conn, projeto_id, "export")
+    # Export não commita mais (commits são globais agora). O usuário confirma o
+    # estado exportado com um `POST /api/versao/commit`.
     return out_path
 
 

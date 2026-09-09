@@ -1,8 +1,39 @@
 # Plano — Versionamento estilo Git (branches + merge)
 
-> **Status:** planejado, não implementado. Este documento é a proposta fechada com as
-> decisões tomadas na conversa de 2026‑09‑09. Quando começar a implementação, o conteúdo
-> relevante migra para `ESPECIFICACAO.md` e a migração ganha `PRAGMA user_version = 2`.
+> **Status:** Fase 1 **implementada** (`PRAGMA user_version = 2`, módulo `app/versao.py`).
+> Fase 2 (merge) segue planejada. Resumo do que está no código abaixo; o resto do
+> documento é a proposta original.
+
+## Implementado (Fase 1)
+
+Tabelas: `commit_`, `ref_`, `head_`, `chg_projeto|pessoa|alocacao|alocacao_mes|projeto_periodo`.
+Cache do HEAD: `baseline_alocacao` / `baseline_alocacao_mes` (mantidas) + `base_projeto` /
+`base_pessoa` / `base_projeto_periodo` (novas, globais). `baseline_meta` / `baseline_pessoa`
+/ `baseline_projeto` foram **removidas** (eram snapshot por projeto — incoerentes para
+commit global).
+
+Módulo `app/versao.py`:
+`commit(msg)` · `checkout(ref)` · `descartar(projeto_id=None)` · `branch(nome, a_partir, trocar)`
+· `deletar_branch` · `log(ref, limite)` · `materializar(commit_id)` · `estado_repo` ·
+`removidas` / `pessoas_alteradas` / `restaurar_alocacao` (usadas pelo export) ·
+`commit_transicao_cache` (usada pelo rebuild do BI).
+
+Endpoints: `GET /api/versao/estado`, `GET /api/versao/log`, `POST /api/versao/commit`,
+`POST /api/versao/branch`, `POST /api/versao/checkout`, `DELETE /api/versao/branch/{nome}`.
+`/api/estado` passou a incluir um bloco `versao`. `/api/descartar-tudo` = `reset --hard`;
+`/api/projetos/{id}/descartar` = descarte parcial (alocação/janela do projeto).
+`/api/projetos/{id}/marcar-baseline` **removido** (409 apontando para `/api/versao/commit`).
+
+Desvios do plano original:
+- **Import e export não commitam mais.** As mudanças ficam pendentes até um
+  `POST /api/versao/commit` explícito (antes: import de projeto novo e export = commit).
+- **`bi_import`**: o rebuild move o cache e registra **um** commit `origem='bi'` via
+  `commit_transicao_cache` (o working não é tocado; edições pendentes passam a diferir do
+  novo HEAD).
+- **`projeto` / `pessoa` no `checkout`**: upsert (nunca apagam linha), e só no descarte
+  global — evita brigar com FK/cascade. `alocacao` / `alocacao_mes` / `projeto_periodo`:
+  substituição total no escopo.
+- `pessoa.ativo` continua **fora** do versionamento (vem do BI).
 
 ## Objetivo
 

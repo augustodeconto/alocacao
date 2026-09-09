@@ -114,13 +114,68 @@ CREATE TABLE IF NOT EXISTS bi_custo (
     PRIMARY KEY (id_projetos, nome_colaborador, periodo, tipo_alocacao)
 );
 
--- linha de base = último "commit" do projeto (importação ou export confirmado).
--- O diff baseline -> working decide, no export, o que sai zerado vs. o que nem sai.
-CREATE TABLE IF NOT EXISTS baseline_meta (
-    projeto_id INTEGER PRIMARY KEY REFERENCES projeto(projeto_id) ON DELETE CASCADE,
-    criado_em  TEXT NOT NULL,
-    origem     TEXT NOT NULL            -- 'import' | 'export'
+-- ===== versionamento estilo Git (ver docs/VERSIONAMENTO.md) =====
+-- grafo de commits + branches + ponteiro do checkout
+CREATE TABLE IF NOT EXISTS commit_ (
+    commit_id       INTEGER PRIMARY KEY,
+    parent_id       INTEGER REFERENCES commit_(commit_id),
+    merge_parent_id INTEGER REFERENCES commit_(commit_id),   -- 2º pai, fase 2
+    autor           TEXT,
+    mensagem        TEXT,
+    criado_em       TEXT NOT NULL,
+    origem          TEXT NOT NULL       -- manual | import | export | bi | merge | seed
 );
+CREATE TABLE IF NOT EXISTS ref_ (
+    nome      TEXT PRIMARY KEY,         -- 'main', 'cenario-...'
+    commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
+    criado_em TEXT,
+    nota      TEXT
+);
+CREATE TABLE IF NOT EXISTS head_ (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    ref_nome       TEXT NOT NULL REFERENCES ref_(nome),
+    base_commit_id INTEGER NOT NULL REFERENCES commit_(commit_id)
+);
+-- delta de cada commit vs. o 1º pai; chave natural; deleted=1 = lápide
+CREATE TABLE IF NOT EXISTS chg_projeto (
+    commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
+    projeto_id INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    nome TEXT, empresa TEXT, status TEXT, id_status INTEGER, matricula_gp TEXT,
+    id_filial INTEGER, mes_inicio INTEGER, ano_inicio INTEGER,
+    cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER, gestor_projetos TEXT,
+    PRIMARY KEY (commit_id, projeto_id)
+);
+CREATE TABLE IF NOT EXISTS chg_pessoa (
+    commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
+    matricula TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    nome TEXT, situacao TEXT, equipe TEXT, area TEXT, tipo_contrato TEXT,
+    inicio_contrato TEXT, fim_contrato TEXT, formacao TEXT, id_filial INTEGER,
+    carga_diaria REAL, capacidade_mensal INTEGER, remuneracao REAL,
+    inicio_vigencia TEXT, valor_hora REAL,
+    PRIMARY KEY (commit_id, matricula)
+);
+CREATE TABLE IF NOT EXISTS chg_alocacao (
+    commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
+    projeto_id INTEGER NOT NULL, matricula TEXT NOT NULL, tipo_alocacao TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (commit_id, projeto_id, matricula, tipo_alocacao)
+);
+CREATE TABLE IF NOT EXISTS chg_alocacao_mes (
+    commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
+    projeto_id INTEGER NOT NULL, matricula TEXT NOT NULL, tipo_alocacao TEXT NOT NULL,
+    periodo TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, horas INTEGER,
+    PRIMARY KEY (commit_id, projeto_id, matricula, tipo_alocacao, periodo)
+);
+CREATE TABLE IF NOT EXISTS chg_projeto_periodo (
+    commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
+    projeto_id INTEGER NOT NULL, periodo TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0, ordem INTEGER,
+    PRIMARY KEY (commit_id, projeto_id, periodo)
+);
+-- cache do estado materializado do HEAD.
+--   alocação: baseline_alocacao / baseline_alocacao_mes (schema já global)
+--   campos:   base_projeto / base_pessoa / base_projeto_periodo
+-- O diff cache -> working é o que a tela pinta e o que um `commit` grava.
 CREATE TABLE IF NOT EXISTS baseline_alocacao (
     projeto_id    INTEGER NOT NULL REFERENCES projeto(projeto_id) ON DELETE CASCADE,
     matricula     TEXT NOT NULL,
@@ -135,20 +190,22 @@ CREATE TABLE IF NOT EXISTS baseline_alocacao_mes (
     horas         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (projeto_id, matricula, tipo_alocacao, periodo)
 );
--- snapshot dos campos de pessoa (só quem está alocado no projeto) e do projeto
-CREATE TABLE IF NOT EXISTS baseline_pessoa (
-    projeto_id INTEGER NOT NULL REFERENCES projeto(projeto_id) ON DELETE CASCADE,
-    matricula  TEXT NOT NULL,
-    nome TEXT, situacao TEXT, equipe TEXT, area TEXT, tipo_contrato TEXT,
-    inicio_contrato TEXT, fim_contrato TEXT, formacao TEXT, id_filial INTEGER,
-    carga_diaria REAL, capacidade_mensal INTEGER, remuneracao REAL, inicio_vigencia TEXT,
-    PRIMARY KEY (projeto_id, matricula)
-);
-CREATE TABLE IF NOT EXISTS baseline_projeto (
-    projeto_id INTEGER PRIMARY KEY REFERENCES projeto(projeto_id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS base_projeto (
+    projeto_id INTEGER PRIMARY KEY,
     nome TEXT, empresa TEXT, status TEXT, id_status INTEGER, matricula_gp TEXT,
     id_filial INTEGER, mes_inicio INTEGER, ano_inicio INTEGER,
-    cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER
+    cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER, gestor_projetos TEXT
+);
+CREATE TABLE IF NOT EXISTS base_pessoa (
+    matricula TEXT PRIMARY KEY,
+    nome TEXT, situacao TEXT, equipe TEXT, area TEXT, tipo_contrato TEXT,
+    inicio_contrato TEXT, fim_contrato TEXT, formacao TEXT, id_filial INTEGER,
+    carga_diaria REAL, capacidade_mensal INTEGER, remuneracao REAL,
+    inicio_vigencia TEXT, valor_hora REAL
+);
+CREATE TABLE IF NOT EXISTS base_projeto_periodo (
+    projeto_id INTEGER NOT NULL, periodo TEXT NOT NULL, ordem INTEGER,
+    PRIMARY KEY (projeto_id, periodo)
 );
 
 CREATE INDEX IF NOT EXISTS ix_alocacao_projeto ON alocacao(projeto_id);
@@ -226,6 +283,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
                                    AND m.tipo_alocacao = baseline_alocacao.tipo_alocacao)"""
         )
         conn.execute("PRAGMA user_version = 1")
+
+    # v2: versionamento estilo Git. Cria o commit raiz + branch main + HEAD a
+    # partir do estado atual (baseline_alocacao* + campos do working). As tabelas
+    # baseline_pessoa/projeto/meta (snapshot por projeto) foram substituídas por
+    # base_pessoa/base_projeto/base_projeto_periodo (globais) + o grafo de commits.
+    if conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+        from . import versao
+        versao.garantir_inicializado(conn)
+        for t in ("baseline_meta", "baseline_pessoa", "baseline_projeto"):
+            conn.execute(f"DROP TABLE IF EXISTS {t}")
+        conn.execute("PRAGMA user_version = 2")
     conn.commit()
 
 

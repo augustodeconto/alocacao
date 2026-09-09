@@ -7,9 +7,9 @@ Arquivos (detectados pelo cabeçalho):
                          pessoa/mês/tipo, todos os meses) e `pessoa.valor_hora`
   - projetomescusto   -> `bi_projeto`
 
-BI é autoridade da baseline. O WORKING (o que o usuário edita) NÃO é tocado; projeto
-sem alocação no working ganha cópia da baseline. Para descartar edições e voltar à
-baseline: `baseline.restaurar_working` / `POST /api/descartar-tudo`.
+BI é autoridade do HEAD: o rebuild move o cache e registra um commit `origem='bi'`.
+O WORKING (o que o usuário edita) NÃO é tocado; projeto sem alocação ganha cópia.
+Para descartar edições e voltar ao HEAD: `POST /api/descartar-tudo`.
 
 Uso CLI:  python -m app.bi_import <arquivo.xlsx> [<arquivo.xlsx> ...]
 """
@@ -199,30 +199,27 @@ def _meses_contiguos(ini: str, fim: str) -> list[str]:
     return out
 
 
-def _snap_bp(conn: sqlite3.Connection, pid: int) -> None:
-    from . import baseline as _b
+def _sync_base_campos(conn: sqlite3.Connection) -> None:
+    """Cache global de campos (base_pessoa / base_projeto) := estado atual do
+    working. O BI já atualizou `pessoa` e `projeto` antes deste ponto, então isso
+    grava os valores do BI como 'commitados'."""
+    from . import versao as _v
 
-    cols = ", ".join(_b.PESSOA_COLS)
-    conn.execute("DELETE FROM baseline_pessoa WHERE projeto_id=?", (pid,))
-    conn.execute(
-        f"""INSERT INTO baseline_pessoa (projeto_id, matricula, {cols})
-            SELECT ?, p.matricula, {', '.join('p.' + c for c in _b.PESSOA_COLS)}
-            FROM pessoa p
-            WHERE p.matricula IN (SELECT matricula FROM baseline_alocacao WHERE projeto_id=?)""",
-        (pid, pid),
-    )
-    pcols = ", ".join(_b.PROJETO_COLS)
-    conn.execute("DELETE FROM baseline_projeto WHERE projeto_id=?", (pid,))
-    conn.execute(
-        f"INSERT INTO baseline_projeto (projeto_id, {pcols}) SELECT projeto_id, {pcols} "
-        f"FROM projeto WHERE projeto_id=?",
-        (pid,),
-    )
+    conn.execute("DELETE FROM base_projeto")
+    conn.execute(f"INSERT INTO base_projeto (projeto_id, {','.join(_v.PROJETO_COLS)}) "
+                 f"SELECT projeto_id, {','.join(_v.PROJETO_COLS)} FROM projeto")
+    conn.execute("DELETE FROM base_pessoa")
+    conn.execute(f"INSERT INTO base_pessoa (matricula, {','.join(_v.PESSOA_COLS)}) "
+                 f"SELECT matricula, {','.join(_v.PESSOA_COLS)} FROM pessoa")
 
 
 def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
-    """Reconstrói a baseline (alocação + pessoa + projeto) a partir do `bi_custo`.
-    Working não é tocado; projeto sem alocação ganha cópia da baseline."""
+    """Reconstrói o HEAD (alocação + janela + campos) a partir do `bi_custo` e
+    registra um commit `origem='bi'`. O working não é tocado (exceto projeto sem
+    alocação, que ganha cópia); as edições pendentes passam a diferir do novo HEAD."""
+    from . import versao as _v
+
+    cache_antes = _v.snapshot_cache(conn)
     ext_to_pid = {
         str(r["id_projeto_externo"]): r["projeto_id"]
         for r in conn.execute(
@@ -260,10 +257,15 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
         conn.execute("DELETE FROM baseline_alocacao WHERE projeto_id=?", (pid,))
         conn.execute("DELETE FROM baseline_alocacao_mes WHERE projeto_id=?", (pid,))
         conn.execute("DELETE FROM projeto_periodo WHERE projeto_id=?", (pid,))
+        conn.execute("DELETE FROM base_projeto_periodo WHERE projeto_id=?", (pid,))
         ms = sorted(meses_proj[pid])
         full = _meses_contiguos(ms[0], ms[-1])
         conn.executemany(
             "INSERT INTO projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)",
+            [(pid, p, i) for i, p in enumerate(full)],
+        )
+        conn.executemany(
+            "INSERT INTO base_projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)",
             [(pid, p, i) for i, p in enumerate(full)],
         )
         conn.execute(
@@ -284,14 +286,7 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
             [(pid, mat, tipo, p, h) for p, h in mm.items()],
         )
 
-    now = _dt.datetime.now().isoformat(timespec="seconds")
-    for pid in pids:
-        conn.execute(
-            "INSERT INTO baseline_meta (projeto_id, criado_em, origem) VALUES (?,?, 'bi') "
-            "ON CONFLICT(projeto_id) DO UPDATE SET criado_em=excluded.criado_em, origem='bi'",
-            (pid, now),
-        )
-        _snap_bp(conn, pid)
+    _sync_base_campos(conn)
 
     # projeto sem alocação no working -> copia da baseline
     novos_working = 0
@@ -313,7 +308,10 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
             )
         novos_working += 1
     conn.commit()
-    return {"projetos_baseline": len(pids), "projetos_preenchidos": novos_working}
+
+    cid = _v.commit_transicao_cache(conn, "Importação BI", "bi", cache_antes)
+    return {"projetos_baseline": len(pids), "projetos_preenchidos": novos_working,
+            "commit_bi": cid}
 
 
 def load_projetos(conn: sqlite3.Connection, sheet) -> dict:

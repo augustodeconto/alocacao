@@ -149,15 +149,12 @@ def import_workbook(conn: sqlite3.Connection, path: str | Path) -> ImportResult:
         cur.execute("DELETE FROM anotacao WHERE projeto_id=? AND autor='importado'", (projeto_id,))
         _import_comments(cur, wb, projeto_id, aloc)
         conn.commit()
-        if novo:
-            # projeto que não veio do BI: o arquivo também vira a baseline inicial
-            from . import baseline
-            baseline.capturar(conn, projeto_id, "import")
 
+    # Import mexe só no working — não commita. As mudanças aparecem como
+    # pendentes até um `POST /api/versao/commit` explícito.
     return ImportResult(
         "updated" if existente else "imported", projeto_id, proj["nome"],
-        f"{len(rows)} alocações, {len(periodos)} meses"
-        + ("" if novo else " (working atualizado; baseline mantida)"),
+        f"{len(rows)} alocações, {len(periodos)} meses (working; commit pendente)",
     )
 
 
