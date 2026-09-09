@@ -96,9 +96,12 @@ Grafo global de commits (um snapshot do plano inteiro por commit). Detalhe e des
 - **Cache do HEAD** (o que a tela e o `commit` comparam contra o working):
   `baseline_alocacao` / `baseline_alocacao_mes` + `base_projeto` / `base_pessoa` /
   `base_projeto_periodo`.
-- **Operações (Fase 1):** `commit` (working → novo commit, avança a ref), `checkout`
-  (materializa working+cache; exige working limpo), `descartar` (working := HEAD; parcial
-  por projeto), `branch`, `log`. **Merge = Fase 2** (o esquema já tem o 2º pai).
+- **Operações:** `commit` (working → novo commit, avança a ref), `checkout` (materializa
+  working+cache; exige working limpo), `descartar` (working := HEAD; parcial por projeto),
+  `branch`, `log`, e **`merge`** — 3-way com merge base = LCA no DAG. Conflito por célula
+  (`mes`) ou linha (`projeto`/`pessoa`) vai para `merge_conflito`; `merge_estado` guarda o
+  merge em andamento; `resolver_conflito` (`ours`/`theirs`/valor) aplica no working;
+  `concluir_merge` grava o commit de 2 pais (`origem='merge'`); `abortar_merge` desfaz.
 - **Import e export não commitam** — deixam mudanças pendentes. O rebuild do BI move o
   cache e registra **um** commit `origem='bi'`.
 - O export continua saindo **do diff working × HEAD**: alocação sumida → linha zerada;
@@ -416,6 +419,13 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-09** — **Merge 3-way (Fase 2 do versionamento).** `versao.merge(origem)`:
+  fast-forward quando possível, senão 3-way contra o LCA no DAG. Conflito por célula
+  (`mes`) / linha (`projeto`/`pessoa`) → `merge_conflito`; `merge_estado` = `MERGE_HEAD`.
+  `resolver_conflito` / `concluir_merge` (commit de 2 pais, `origem='merge'`) /
+  `abortar_merge`. `commit` e `checkout` bloqueiam durante o merge. Endpoints
+  `POST /api/versao/merge`, `GET /api/versao/conflitos`, `POST /api/versao/conflito/resolver`,
+  `POST /api/versao/merge/{concluir,abortar}`.
 - **2026-09-09** — **Versionamento estilo Git no banco (`user_version = 2`).** Grafo global
   de commits (`commit_` / `ref_` / `head_`) + delta por commit (`chg_*`, chave natural,
   lápide). Cache do HEAD = `baseline_alocacao*` + `base_projeto` / `base_pessoa` /

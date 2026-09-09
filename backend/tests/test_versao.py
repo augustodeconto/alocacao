@@ -80,6 +80,134 @@ def test_log_segue_a_cadeia_de_pais(conn, sample_path):
     assert ids[-1] == 1                         # commit raiz (seed)
 
 
+def _uma_celula(conn):
+    r = conn.execute(
+        """SELECT a.projeto_id p, a.matricula m, a.tipo_alocacao t
+           FROM alocacao a JOIN alocacao_mes mm USING (alocacao_id)
+           WHERE mm.periodo='2026-07-01' LIMIT 1"""
+    ).fetchone()
+    return r["p"], r["m"], r["t"]
+
+
+def _set_cel(conn, pid, mat, tipo, per, val):
+    aid = conn.execute(
+        "SELECT alocacao_id FROM alocacao WHERE projeto_id=? AND matricula=? AND tipo_alocacao=?",
+        (pid, mat, tipo),
+    ).fetchone()["alocacao_id"]
+    conn.execute(
+        "INSERT INTO alocacao_mes (alocacao_id, periodo, horas) VALUES (?,?,?) "
+        "ON CONFLICT(alocacao_id, periodo) DO UPDATE SET horas=excluded.horas",
+        (aid, per, val),
+    )
+    conn.commit()
+
+
+def _cel(conn, pid, mat, tipo, per):
+    r = conn.execute(
+        """SELECT horas FROM alocacao_mes WHERE periodo=? AND alocacao_id IN
+           (SELECT alocacao_id FROM alocacao WHERE projeto_id=? AND matricula=? AND tipo_alocacao=?)""",
+        (per, pid, mat, tipo),
+    ).fetchone()
+    return r["horas"] if r else 0
+
+
+def test_merge_sem_conflito_e_fast_forward(conn, sample_path):
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+    pid, mat, tipo = _uma_celula(conn)
+
+    versao.branch(conn, "A", trocar=True)
+    _set_cel(conn, pid, mat, tipo, "2026-09-01", 40)     # mês novo, só na A
+    versao.commit(conn, "A: setembro")
+
+    versao.checkout(conn, "main")
+    # main não mudou -> merge A é fast-forward
+    res = versao.merge(conn, "A")
+    assert res["status"] == "fast-forward"
+    assert _cel(conn, pid, mat, tipo, "2026-09-01") == 40
+
+    # agora divergem em meses diferentes -> merge de verdade, sem conflito
+    versao.checkout(conn, "A")
+    _set_cel(conn, pid, mat, tipo, "2026-10-01", 8)
+    versao.commit(conn, "A: outubro")
+    versao.checkout(conn, "main")
+    _set_cel(conn, pid, mat, tipo, "2026-11-01", 9)
+    versao.commit(conn, "main: novembro")
+    res = versao.merge(conn, "A")
+    assert res["status"] == "ok"
+    assert _cel(conn, pid, mat, tipo, "2026-10-01") == 8
+    assert _cel(conn, pid, mat, tipo, "2026-11-01") == 9
+    assert versao.log(conn)[0]["origem"] == "merge"
+
+
+def test_merge_conflito_resolve_e_conclui(conn, sample_path):
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+    pid, mat, tipo = _uma_celula(conn)
+
+    versao.branch(conn, "B", trocar=True)
+    _set_cel(conn, pid, mat, tipo, "2026-07-01", 100)
+    versao.commit(conn, "B: julho 100")
+    versao.checkout(conn, "main")
+    _set_cel(conn, pid, mat, tipo, "2026-07-01", 200)
+    versao.commit(conn, "main: julho 200")
+
+    res = versao.merge(conn, "B")
+    assert res["status"] == "conflito"
+    (cf,) = res["conflitos"]
+    assert cf["ours"] == 200 and cf["theirs"] == 100
+    assert _cel(conn, pid, mat, tipo, "2026-07-01") == 200        # OURS enquanto pendente
+
+    import pytest
+    with pytest.raises(ValueError):
+        versao.concluir_merge(conn, "cedo demais")                # conflito aberto
+
+    versao.resolver_conflito(conn, cf["id"], valor=150)
+    cid = versao.concluir_merge(conn, "merge B")
+    assert _cel(conn, pid, mat, tipo, "2026-07-01") == 150
+    mc = conn.execute("SELECT parent_id, merge_parent_id, origem FROM commit_ WHERE commit_id=?",
+                      (cid,)).fetchone()
+    assert mc["merge_parent_id"] is not None and mc["origem"] == "merge"
+    assert not versao.sujo(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM merge_estado").fetchone()["c"] == 0
+
+
+def test_merge_abortar_restaura(conn, sample_path):
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+    pid, mat, tipo = _uma_celula(conn)
+    versao.branch(conn, "C", trocar=True)
+    _set_cel(conn, pid, mat, tipo, "2026-07-01", 1)
+    versao.commit(conn, "C")
+    versao.checkout(conn, "main")
+    _set_cel(conn, pid, mat, tipo, "2026-07-01", 2)
+    versao.commit(conn, "main")
+    versao.merge(conn, "C")
+    assert conn.execute("SELECT COUNT(*) c FROM merge_estado").fetchone()["c"] == 1
+    versao.abortar_merge(conn)
+    assert _cel(conn, pid, mat, tipo, "2026-07-01") == 2          # OURS de volta
+    assert conn.execute("SELECT COUNT(*) c FROM merge_estado").fetchone()["c"] == 0
+    assert not versao.sujo(conn)
+
+
+def test_commit_bloqueado_durante_merge(conn, sample_path):
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+    pid, mat, tipo = _uma_celula(conn)
+    versao.branch(conn, "E", trocar=True)
+    _set_cel(conn, pid, mat, tipo, "2026-07-01", 1)
+    versao.commit(conn, "E")
+    versao.checkout(conn, "main")
+    _set_cel(conn, pid, mat, tipo, "2026-07-01", 2)
+    versao.commit(conn, "main")
+    versao.merge(conn, "E")
+    import pytest
+    with pytest.raises(versao.MergeEmAndamento):
+        versao.commit(conn, "não pode")
+    with pytest.raises(versao.MergeEmAndamento):
+        versao.checkout(conn, "E")
+
+
 def test_nao_apaga_main_nem_branch_atual(conn):
     with pytest.raises(ValueError):
         versao.deletar_branch(conn, "main")

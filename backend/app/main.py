@@ -646,6 +646,66 @@ def versao_deletar_branch(nome: str):
         return {"estado": _estado()}
 
 
+@app.post("/api/versao/merge")
+def versao_merge(payload: dict = Body(...)):
+    origem = str(payload.get("origem") or "").strip()
+    with _lock:
+        try:
+            res = versao.merge(_conn, origem, autor=str(payload.get("autor") or "").strip())
+        except versao.VersaoSuja as e:
+            raise HTTPException(409, str(e))
+        except versao.MergeEmAndamento as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except KeyError:
+            raise HTTPException(404, f"branch '{origem}' não existe")
+        return {**res, "estado": _estado()}
+
+
+@app.get("/api/versao/conflitos")
+def versao_conflitos():
+    with _lock:
+        return {"conflitos": versao.listar_conflitos(_conn)}
+
+
+@app.post("/api/versao/conflito/resolver")
+def versao_resolver_conflito(payload: dict = Body(...)):
+    try:
+        cid = int(payload["id"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(422, "id do conflito é obrigatório")
+    with _lock:
+        try:
+            versao.resolver_conflito(
+                _conn, cid, lado=payload.get("lado"), valor=payload.get("valor"))
+        except KeyError:
+            raise HTTPException(404, "conflito não encontrado")
+        return {"estado": _estado()}
+
+
+@app.post("/api/versao/merge/concluir")
+def versao_concluir_merge(payload: dict = Body(...)):
+    with _lock:
+        try:
+            cid = versao.concluir_merge(
+                _conn, str(payload.get("mensagem") or "").strip(),
+                autor=str(payload.get("autor") or "").strip())
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        return {"commit_id": cid, "estado": _estado()}
+
+
+@app.post("/api/versao/merge/abortar")
+def versao_abortar_merge():
+    with _lock:
+        try:
+            versao.abortar_merge(_conn)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        return {"estado": _estado()}
+
+
 @app.put("/api/alocacao/{alocacao_id}/mes")
 def editar_mes(alocacao_id: int, payload: dict = Body(...)):
     with _lock:

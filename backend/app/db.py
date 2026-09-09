@@ -207,6 +207,23 @@ CREATE TABLE IF NOT EXISTS base_projeto_periodo (
     projeto_id INTEGER NOT NULL, periodo TEXT NOT NULL, ordem INTEGER,
     PRIMARY KEY (projeto_id, periodo)
 );
+-- merge em andamento (fase 2): equivale ao MERGE_HEAD do git
+CREATE TABLE IF NOT EXISTS merge_estado (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    origem        TEXT NOT NULL,
+    theirs_commit INTEGER NOT NULL,
+    base_commit   INTEGER NOT NULL,
+    criado_em     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS merge_conflito (
+    id          INTEGER PRIMARY KEY,
+    dominio     TEXT NOT NULL,        -- 'mes' | 'projeto' | 'pessoa'
+    chave       TEXT NOT NULL,        -- json da chave natural
+    rotulo      TEXT,                 -- legível p/ a tela
+    base_val    TEXT, our_val TEXT, their_val TEXT,   -- json
+    resolvido   INTEGER NOT NULL DEFAULT 0,
+    valor_final TEXT
+);
 
 CREATE INDEX IF NOT EXISTS ix_alocacao_projeto ON alocacao(projeto_id);
 CREATE INDEX IF NOT EXISTS ix_alocacao_matricula ON alocacao(matricula);

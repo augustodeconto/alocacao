@@ -17,6 +17,7 @@ Commits são **globais** (um snapshot do plano inteiro).
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
 import sqlite3
 
 PROJETO_COLS = [
@@ -36,6 +37,10 @@ class VersaoSuja(Exception):
 
 class NadaParaCommitar(Exception):
     pass
+
+
+class MergeEmAndamento(Exception):
+    """Há um merge sem concluir — resolva/conclua ou aborte antes."""
 
 
 def _now() -> str:
@@ -372,6 +377,7 @@ def sujo(conn: sqlite3.Connection) -> bool:
 
 
 def commit(conn: sqlite3.Connection, mensagem: str, autor: str = "", origem: str = "manual") -> int:
+    _sem_merge(conn)
     h = _head(conn)
     d = _delta(_estado_cache(conn), _estado_working(conn))
     if _delta_vazio(d):
@@ -427,6 +433,7 @@ def descartar(conn: sqlite3.Connection, projeto_id: int | None = None) -> None:
 
 
 def checkout(conn: sqlite3.Connection, ref: str) -> None:
+    _sem_merge(conn)
     if sujo(conn):
         raise VersaoSuja("há mudanças não commitadas — faça commit ou descarte antes")
     r = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (ref,)).fetchone()
@@ -502,13 +509,265 @@ def estado_repo(conn: sqlite3.Connection) -> dict:
         )
     ]
     d = diff_pendente(conn)
+    me = conn.execute("SELECT * FROM merge_estado WHERE id=1").fetchone()
+    merge_info = None
+    if me is not None:
+        n = conn.execute("SELECT COUNT(*) t, SUM(resolvido) r FROM merge_conflito").fetchone()
+        merge_info = {"origem": me["origem"], "conflitos": n["t"],
+                      "resolvidos": n["r"] or 0}
     return {
         "branch": h["ref_nome"],
         "head_commit": h["base_commit_id"],
         "sujo": not _delta_vazio(d),
         "pendente": _resumo(d),
         "refs": refs,
+        "merge": merge_info,
     }
+
+
+# --------------------------------------------------------------------------- #
+# merge 3-way (Fase 2)
+# --------------------------------------------------------------------------- #
+def _sem_merge(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT 1 FROM merge_estado WHERE id=1").fetchone():
+        raise MergeEmAndamento("merge em andamento — conclua ou aborte antes")
+
+
+def _ancestrais(conn: sqlite3.Connection, c: int) -> dict[int, int]:
+    """commit_id -> distância mínima a partir de `c` (inclui `c` em 0)."""
+    dist = {c: 0}
+    fila = [c]
+    while fila:
+        x = fila.pop(0)
+        row = conn.execute("SELECT parent_id, merge_parent_id FROM commit_ WHERE commit_id=?", (x,)).fetchone()
+        if row is None:
+            continue
+        for p in (row["parent_id"], row["merge_parent_id"]):
+            if p is not None and p not in dist:
+                dist[p] = dist[x] + 1
+                fila.append(p)
+    return dist
+
+
+def _merge_base(conn: sqlite3.Connection, a: int, b: int) -> int | None:
+    da, db = _ancestrais(conn, a), _ancestrais(conn, b)
+    comum = set(da) & set(db)
+    if not comum:
+        return None
+    return min(comum, key=lambda x: (da[x] + db[x], -x))
+
+
+_VAZIO = {"projeto": {}, "pessoa": {}, "alocacao": {}, "mes": {}, "periodo": {}}
+
+
+def _merge3(Eb: dict, Eo: dict, Et: dict) -> tuple[dict, list[tuple]]:
+    """3-way. Devolve (estado mesclado com OURS nos conflitos, lista de conflitos)."""
+    m = {k: dict(Eo[k]) for k in _VAZIO}
+    conf: list[tuple] = []
+
+    for k in set(Eo["alocacao"]) | set(Et["alocacao"]) | set(Eb["alocacao"]):
+        o, t, base = k in Eo["alocacao"], k in Et["alocacao"], k in Eb["alocacao"]
+        keep = o if o == t else (t if o == base else o)
+        if keep:
+            m["alocacao"][k] = True
+        else:
+            m["alocacao"].pop(k, None)
+
+    for k in set(Eo["mes"]) | set(Et["mes"]) | set(Eb["mes"]):
+        o, t, base = Eo["mes"].get(k), Et["mes"].get(k), Eb["mes"].get(k)
+        if o == t:
+            v = o
+        elif o == base:
+            v = t
+        elif t == base:
+            v = o
+        else:
+            v = o
+            conf.append(("mes", k, base, o, t))
+        if v and v > 0:
+            m["mes"][k] = v
+        else:
+            m["mes"].pop(k, None)
+    m["mes"] = {k: v for k, v in m["mes"].items() if (k[0], k[1], k[2]) in m["alocacao"]}
+
+    for dom in ("projeto", "pessoa"):
+        for k in set(Eo[dom]) | set(Et[dom]) | set(Eb[dom]):
+            o, t, base = Eo[dom].get(k), Et[dom].get(k), Eb[dom].get(k)
+            if o == t:
+                row = o
+            elif o == base:
+                row = t
+            elif t == base:
+                row = o
+            else:
+                row = o
+                conf.append((dom, k, base, o, t))
+            if row is not None:
+                m[dom][k] = row
+            else:
+                m[dom].pop(k, None)
+
+    for k, ordv in Et["periodo"].items():          # janela: OURS vence, união
+        m["periodo"].setdefault(k, ordv)
+    return m, conf
+
+
+def _rotulo(conn: sqlite3.Connection, dom: str, k) -> str:
+    if dom == "projeto":
+        r = conn.execute("SELECT nome FROM projeto WHERE projeto_id=?", (k,)).fetchone()
+        return r["nome"] if r else f"projeto {k}"
+    if dom == "pessoa":
+        r = conn.execute("SELECT nome FROM pessoa WHERE matricula=?", (k,)).fetchone()
+        return r["nome"] if r else str(k)
+    pid, mat, tipo, per = k
+    nome = conn.execute("SELECT nome FROM pessoa WHERE matricula=?", (mat,)).fetchone()
+    pnome = conn.execute("SELECT nome FROM projeto WHERE projeto_id=?", (pid,)).fetchone()
+    mm = f"{per[5:7]}/{per[:4]}"
+    return f"{(nome['nome'] if nome else mat)} · {tipo} · {(pnome['nome'] if pnome else pid)} · {mm}"
+
+
+def _conflito_dict(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"], "dominio": r["dominio"], "chave": _json.loads(r["chave"]),
+        "rotulo": r["rotulo"], "resolvido": bool(r["resolvido"]),
+        "base": _json.loads(r["base_val"]), "ours": _json.loads(r["our_val"]),
+        "theirs": _json.loads(r["their_val"]),
+        "valor_final": _json.loads(r["valor_final"]) if r["valor_final"] else None,
+    }
+
+
+def listar_conflitos(conn: sqlite3.Connection) -> list[dict]:
+    return [_conflito_dict(r) for r in conn.execute("SELECT * FROM merge_conflito ORDER BY dominio, id")]
+
+
+def merge(conn: sqlite3.Connection, origem: str, autor: str = "") -> dict:
+    _sem_merge(conn)
+    if sujo(conn):
+        raise VersaoSuja("faça commit ou descarte antes de mesclar")
+    h = _head(conn)
+    if origem == h["ref_nome"]:
+        raise ValueError("não dá para mesclar a branch nela mesma")
+    r = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (origem,)).fetchone()
+    if r is None:
+        raise KeyError(origem)
+    ours, theirs = h["base_commit_id"], r["commit_id"]
+
+    anc_ours = _ancestrais(conn, ours)
+    if theirs == ours or theirs in anc_ours:
+        return {"status": "em-dia"}
+    if ours in _ancestrais(conn, theirs):                       # fast-forward
+        aplicar_ao_working(conn, materializar(conn, theirs), escopo=None)
+        conn.execute("UPDATE projeto SET alterado_em=NULL")
+        conn.execute("UPDATE ref_ SET commit_id=? WHERE nome=?", (theirs, h["ref_nome"]))
+        conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (theirs,))
+        conn.commit()
+        return {"status": "fast-forward", "commit_id": theirs}
+
+    base = _merge_base(conn, ours, theirs)
+    Eb = materializar(conn, base) if base else {k: {} for k in _VAZIO}
+    Eo, Et = materializar(conn, ours), materializar(conn, theirs)
+    mesclado, conf = _merge3(Eb, Eo, Et)
+
+    aplicar_ao_working(conn, mesclado, escopo=None)
+    conn.execute(
+        "INSERT OR REPLACE INTO merge_estado (id, origem, theirs_commit, base_commit, criado_em) "
+        "VALUES (1,?,?,?,?)", (origem, theirs, base if base else ours, _now()))
+    conn.execute("DELETE FROM merge_conflito")
+    for (dom, k, bv, ov, tv) in conf:
+        conn.execute(
+            "INSERT INTO merge_conflito (dominio, chave, rotulo, base_val, our_val, their_val) "
+            "VALUES (?,?,?,?,?,?)",
+            (dom, _json.dumps(k), _rotulo(conn, dom, k),
+             _json.dumps(bv), _json.dumps(ov), _json.dumps(tv)))
+    conn.commit()
+
+    if not conf:
+        cid = concluir_merge(conn, f"Merge da branch '{origem}'", autor=autor)
+        return {"status": "ok", "commit_id": cid}
+    return {"status": "conflito", "conflitos": listar_conflitos(conn)}
+
+
+def resolver_conflito(conn: sqlite3.Connection, cid: int, *, lado: str | None = None,
+                      valor=None) -> None:
+    r = conn.execute("SELECT * FROM merge_conflito WHERE id=?", (cid,)).fetchone()
+    if r is None:
+        raise KeyError(cid)
+    if lado == "ours":
+        final = _json.loads(r["our_val"])
+    elif lado == "theirs":
+        final = _json.loads(r["their_val"])
+    else:
+        final = valor
+    dom, k = r["dominio"], _json.loads(r["chave"])
+
+    if dom == "mes":
+        pid, mat, tipo, per = k
+        v = 0 if final in (None, "", "0") else int(round(float(final)))
+        if v > 0:
+            conn.execute("INSERT OR IGNORE INTO alocacao (projeto_id, matricula, tipo_alocacao) "
+                         "VALUES (?,?,?)", (pid, mat, tipo))
+            aid = conn.execute("SELECT alocacao_id FROM alocacao WHERE projeto_id=? AND matricula=? "
+                               "AND tipo_alocacao=?", (pid, mat, tipo)).fetchone()["alocacao_id"]
+            conn.execute("INSERT INTO alocacao_mes (alocacao_id, periodo, horas) VALUES (?,?,?) "
+                         "ON CONFLICT(alocacao_id, periodo) DO UPDATE SET horas=excluded.horas",
+                         (aid, per, v))
+        else:
+            conn.execute("DELETE FROM alocacao_mes WHERE periodo=? AND alocacao_id IN "
+                         "(SELECT alocacao_id FROM alocacao WHERE projeto_id=? AND matricula=? "
+                         "AND tipo_alocacao=?)", (per, pid, mat, tipo))
+            final = 0
+    elif dom in ("projeto", "pessoa"):
+        cols = PROJETO_COLS if dom == "projeto" else PESSOA_COLS
+        row = final if isinstance(final, dict) else _json.loads(final)
+        if dom == "projeto":
+            conn.execute(f"UPDATE projeto SET {','.join(f'{c}=?' for c in cols)} WHERE projeto_id=?",
+                         (*[row.get(c) for c in cols], k))
+        else:
+            conn.execute("INSERT OR IGNORE INTO pessoa (matricula, nome) VALUES (?,?)",
+                         (k, row.get("nome") or k))
+            conn.execute(f"UPDATE pessoa SET {','.join(f'{c}=?' for c in cols)} WHERE matricula=?",
+                         (*[row.get(c) for c in cols], k))
+
+    conn.execute("UPDATE merge_conflito SET resolvido=1, valor_final=? WHERE id=?",
+                 (_json.dumps(final), cid))
+    conn.commit()
+
+
+def concluir_merge(conn: sqlite3.Connection, mensagem: str, autor: str = "") -> int:
+    me = conn.execute("SELECT * FROM merge_estado WHERE id=1").fetchone()
+    if me is None:
+        raise ValueError("nenhum merge em andamento")
+    pend = conn.execute("SELECT COUNT(*) c FROM merge_conflito WHERE resolvido=0").fetchone()["c"]
+    if pend:
+        raise ValueError(f"{pend} conflito(s) sem resolver")
+    h = _head(conn)
+    ours = h["base_commit_id"]
+    final = _estado_working(conn)
+    d = _delta(materializar(conn, ours), final)
+    cid = conn.execute(
+        "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
+        "VALUES (?, ?, ?, ?, ?, 'merge')",
+        (ours, me["theirs_commit"], autor or None,
+         mensagem or f"Merge da branch '{me['origem']}'", _now()),
+    ).lastrowid
+    _grava_chg(conn, cid, d)
+    _cache_set(conn, final, escopo=None)
+    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome=?", (cid, h["ref_nome"]))
+    conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (cid,))
+    conn.execute("DELETE FROM merge_conflito")
+    conn.execute("DELETE FROM merge_estado")
+    conn.commit()
+    return cid
+
+
+def abortar_merge(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT 1 FROM merge_estado WHERE id=1").fetchone() is None:
+        raise ValueError("nenhum merge em andamento")
+    aplicar_ao_working(conn, materializar(conn, _head(conn)["base_commit_id"]), escopo=None)
+    conn.execute("UPDATE projeto SET alterado_em=NULL")
+    conn.execute("DELETE FROM merge_conflito")
+    conn.execute("DELETE FROM merge_estado")
+    conn.commit()
 
 
 # --------------------------------------------------------------------------- #

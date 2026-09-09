@@ -67,8 +67,13 @@ Full detail + deviations in `docs/VERSIONAMENTO.md`. Module: `backend/app/versao
   `base_projeto_periodo` (global). `baseline_meta/pessoa/projeto` were dropped.
 - `versao.py`: `commit(msg)`, `checkout(ref)` (requires clean working), `descartar(projeto_id=None)`
   (= `reset --hard`, partial if scoped), `branch`, `log`, `materializar`; plus `removidas`
-  / `pessoas_alteradas` / `restaurar_alocacao` used by the export. **Merge = phase 2**
-  (schema already carries the 2nd parent).
+  / `pessoas_alteradas` / `restaurar_alocacao` used by the export.
+- **Merge** (`merge(origem)`): LCA over the DAG (`_ancestrais` follows both parents),
+  3-way by natural key. Conflicts (cell for `mes`, row for `projeto`/`pessoa`) go into
+  `merge_conflito` while `merge_estado` holds the in-progress `MERGE_HEAD`; working keeps
+  OURS until `resolver_conflito` (`lado='ours'|'theirs'` or a custom `valor`). `concluir_merge`
+  writes the 2-parent `origem='merge'` commit; `abortar_merge` reverts. `commit`/`checkout`
+  raise `MergeEmAndamento` while a merge is open.
 - **Import and export do NOT commit** — they leave working dirty until an explicit
   `POST /api/versao/commit`. The BI rebuild moves the cache and records one `origem='bi'`
   commit via `versao.commit_transicao_cache`.

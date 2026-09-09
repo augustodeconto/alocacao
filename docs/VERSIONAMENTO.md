@@ -1,8 +1,8 @@
 # Plano — Versionamento estilo Git (branches + merge)
 
-> **Status:** Fase 1 **implementada** (`PRAGMA user_version = 2`, módulo `app/versao.py`).
-> Fase 2 (merge) segue planejada. Resumo do que está no código abaixo; o resto do
-> documento é a proposta original.
+> **Status:** Fases 1 e 2 **implementadas** (`PRAGMA user_version = 2`, módulo
+> `app/versao.py`). Resumo do que está no código abaixo; o resto do documento é a
+> proposta original.
 
 ## Implementado (Fase 1)
 
@@ -13,15 +13,27 @@ Cache do HEAD: `baseline_alocacao` / `baseline_alocacao_mes` (mantidas) + `base_
 commit global).
 
 Módulo `app/versao.py`:
-`commit(msg)` · `checkout(ref)` · `descartar(projeto_id=None)` · `branch(nome, a_partir, trocar)`
-· `deletar_branch` · `log(ref, limite)` · `materializar(commit_id)` · `estado_repo` ·
-`removidas` / `pessoas_alteradas` / `restaurar_alocacao` (usadas pelo export) ·
-`commit_transicao_cache` (usada pelo rebuild do BI).
+- **Fase 1:** `commit(msg)` · `checkout(ref)` · `descartar(projeto_id=None)` ·
+  `branch(nome, a_partir, trocar)` · `deletar_branch` · `log(ref, limite)` ·
+  `materializar(commit_id)` · `estado_repo` · `removidas` / `pessoas_alteradas` /
+  `restaurar_alocacao` (export) · `commit_transicao_cache` (rebuild do BI).
+- **Fase 2 (merge):** `merge(origem)` → `fast-forward` | `em-dia` | `ok` | `conflito`.
+  Merge base = LCA no DAG (`_ancestrais` segue os dois pais). 3-way por chave natural:
+  um lado mudou → pega esse lado; os dois iguais → pega; os dois diferentes → **conflito**
+  (fica com OURS no working até resolver). `merge_estado` (= `MERGE_HEAD`) + `merge_conflito`.
+  `resolver_conflito(id, lado='ours'|'theirs' | valor=...)` aplica no working na hora;
+  `concluir_merge(msg)` grava o commit de 2 pais (`origem='merge'`) e avança a ref;
+  `abortar_merge()` volta ao HEAD. `commit`/`checkout` ficam bloqueados durante o merge.
+  Conflito por **célula** (`mes`) e por **linha** (`projeto`/`pessoa`); janela: OURS vence,
+  união, sem conflito. add/delete de alocação: união menos deleção mútua-consciente
+  (modify/delete não gera conflito — fica com quem manteve).
 
 Endpoints: `GET /api/versao/estado`, `GET /api/versao/log`, `POST /api/versao/commit`,
-`POST /api/versao/branch`, `POST /api/versao/checkout`, `DELETE /api/versao/branch/{nome}`.
-`/api/estado` passou a incluir um bloco `versao`. `/api/descartar-tudo` = `reset --hard`;
-`/api/projetos/{id}/descartar` = descarte parcial (alocação/janela do projeto).
+`POST /api/versao/branch`, `POST /api/versao/checkout`, `DELETE /api/versao/branch/{nome}`,
+`POST /api/versao/merge`, `GET /api/versao/conflitos`, `POST /api/versao/conflito/resolver`,
+`POST /api/versao/merge/concluir`, `POST /api/versao/merge/abortar`.
+`/api/estado` inclui um bloco `versao` (com `merge` quando há um em andamento).
+`/api/descartar-tudo` = `reset --hard`; `/api/projetos/{id}/descartar` = descarte parcial.
 `/api/projetos/{id}/marcar-baseline` **removido** (409 apontando para `/api/versao/commit`).
 
 Desvios do plano original:
