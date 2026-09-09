@@ -272,11 +272,13 @@ th.treecol, td.treecol {
   box-shadow: 1px 0 0 var(--line);
 }
 td.treecol { z-index: 10; }
-thead th.treecol {
+/* especificidade >= "table.grid thead th" (que fixa z-index:20) para o
+   canto sticky ficar ACIMA dos cabeçalhos de mês que rolam por baixo */
+table.grid thead th.treecol {
   z-index: 60; background-color: var(--head-bg); color: var(--muted); font-weight: 600;
   border-right: 2px solid var(--line);
 }
-thead th.treecol::before {
+table.grid thead th.treecol::before {
   content: ""; position: absolute; inset: 0; background: var(--head-bg); z-index: -1;
 }
 th.treecol .grip {
