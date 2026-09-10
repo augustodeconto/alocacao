@@ -1,8 +1,17 @@
-# Plano — Multiusuário (rascunhos + identidade)
+# Multiusuário (rascunhos + identidade)
 
-> **Status:** planejado, não implementado. Decisões fechadas na conversa de 2026‑09‑09,
-> continuação de `VERSIONAMENTO.md`. Quando implementar, o essencial migra para
-> `ESPECIFICACAO.md`.
+> **Status:** **backend implementado**; frontend pendente (edição continua no modelo
+> single-user de hoje até a migração). Decisões fechadas na conversa de 2026‑09‑09,
+> continuação de `VERSIONAMENTO.md`.
+>
+> **Feito:** tabelas `usuario` / `rascunho`; `versao.commitar_rascunho` com os 4 níveis;
+> endpoints `GET/POST /api/usuarios`, `GET/PUT/DELETE /api/rascunho`,
+> `POST /api/rascunho/commitar` (aceita `autor` no corpo ou header `X-Autor`). Aditivo —
+> os endpoints de edição de célula, `head_` e as tabelas `working` **continuam ativos**.
+>
+> **Pendente:** frontend (rascunho no cliente + autossave + seletor de branch/rascunho),
+> aposentar os endpoints de edição de célula, remover `head_`, revisar export/cache
+> (itens 5–7 da ordem de implementação).
 
 ## Problema
 
@@ -159,14 +168,32 @@ Fase 2 junta branch↔branch.
    `_lock` serializa; o 2º recalcula o merge base contra o topo já avançado. Confirmar que
    o caminho aguenta.
 
-## Ordem de implementação sugerida
+## Ordem de implementação
 
-1. `usuario` + `rascunho` (schema) + `X-Autor` no cliente e no `req()` da API.
-2. `GET/PUT/DELETE /api/rascunho`, autossave no cliente (debounce 3 s + `localStorage`).
-3. Grade a partir de `materializar(ref tip)` + overlay do rascunho no cliente (mover o
-   cálculo de diff da tela para o cliente).
-4. `POST /api/rascunho/{id}/commitar` (3-way vs. tip, commit de 1 pai, consome o rascunho).
-5. Aposentar os endpoints de edição de célula; remover `head_`.
-6. Seletor de branch = seletor de rascunho na toolbar; lista de branches compartilhada.
-7. Revisar export (exporta de um commit) e o cache `baseline_*`/`base_*`.
-8. Migrar o texto relevante para `ESPECIFICACAO.md`.
+1. ✅ `usuario` + `rascunho` (schema).
+2. ✅ `GET/POST /api/usuarios`, `GET/PUT/DELETE /api/rascunho` (aceita `autor` no corpo ou
+   header `X-Autor`).
+3. ⬜ Grade a partir de `materializar(ref tip)` + overlay do rascunho no cliente (mover o
+   cálculo de diff da tela para o cliente); autossave (debounce 3 s + `localStorage`);
+   `X-Autor` no `req()` da API.
+4. ✅ `POST /api/rascunho/commitar` — `versao.commitar_rascunho`: 3-way vs. tip, commit de
+   1 pai, consome o rascunho, 4 níveis, `confirmar` p/ os níveis 2 (com `sempre_revisar`) e 3.
+5. ⬜ Aposentar os endpoints de edição de célula; remover `head_`.
+6. ⬜ Seletor de branch = seletor de rascunho na toolbar; lista de branches compartilhada.
+7. ⬜ Revisar export (exporta de um commit) e o cache `baseline_*`/`base_*`.
+8. ⬜ Migrar o texto relevante para `ESPECIFICACAO.md`.
+
+### Contrato do edit-set (`rascunho.edicoes`, JSON)
+
+```json
+{
+  "mes":      { "<pid>|<mat>|<tipo>|<YYYY-MM-01>": <horas> | null },
+  "aloc_add": [ ["<pid>","<mat>","<tipo>"], ... ],
+  "aloc_del": [ ["<pid>","<mat>","<tipo>"], ... ],
+  "pessoa":   { "<mat>": { "<campo>": <valor>, ... } },
+  "projeto":  { "<pid>": { "<campo>": <valor>, ... } },
+  "janela":   { "<pid>|<YYYY-MM-01>": <ordem> | null }
+}
+```
+`null` em `mes` = voltou a 0. `versao._aplicar_edicoes` aplica isso sobre
+`materializar(base_commit_id)` para montar o OURS sintético.

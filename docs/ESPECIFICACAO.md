@@ -421,8 +421,16 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
-- **2026-09-09** — **Plano multiusuário** ([`docs/COLABORACAO.md`](COLABORACAO.md), não
-  implementado). Sem cópia local. Identidade sem login (`X-Autor`). Larga o `checkout`:
+- **2026-09-09** — **Multiusuário: backend** ([`docs/COLABORACAO.md`](COLABORACAO.md)).
+  Tabelas `usuario` (identidade sem login) e `rascunho` (um por `autor`×branch, edit-set
+  JSON). `versao.commitar_rascunho`: promove um rascunho a commit de 1 pai via 3-way contra
+  o topo da branch, com os **4 níveis** de fricção (1–2 transparentes, 3 pede confirmação
+  com digest, 4 = conflito real). Endpoints `GET/POST /api/usuarios`,
+  `GET/PUT/DELETE /api/rascunho`, `POST /api/rascunho/commitar` (`autor` no corpo ou header
+  `X-Autor`). **Aditivo** — edição de célula, `head_` e `working` seguem ativos; a migração
+  do frontend (rascunho no cliente, aposentar os endpoints antigos) fica pendente.
+- **2026-09-09** — **Plano multiusuário** ([`docs/COLABORACAO.md`](COLABORACAO.md), agora
+  parcialmente implementado). Sem cópia local. Identidade sem login (`X-Autor`). Larga o `checkout`:
   trabalha-se *a partir de um commit*, salva-se *como commit*, comunicação por número de
   commit. Rascunho autorado no cliente e **autossalvo** no servidor (`rascunho` por
   `(autor, branch)`, edit-set JSON, debounce 3 s). Branches compartilhadas e visíveis.
