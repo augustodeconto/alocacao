@@ -30,9 +30,20 @@ export const api = {
   criarProjeto: (payload) => req("POST", "/api/projetos", payload),
   removerProjeto: (id) => req("DELETE", `/api/projetos/${id}`),
   exportar: (id, pasta) => req("POST", `/api/projetos/${id}/exportar`, pasta ? { pasta } : {}),
-  marcarBaseline: (id) => req("POST", `/api/projetos/${id}/marcar-baseline`),
   descartarProjeto: (id) => req("POST", `/api/projetos/${id}/descartar`),
   descartarTudo: () => req("POST", "/api/descartar-tudo"),
+
+  // versionamento (estilo Git)
+  versaoGrafo: () => req("GET", "/api/versao/grafo"),
+  versaoEstado: () => req("GET", "/api/versao/estado"),
+  versaoCommit: (mensagem) => req("POST", "/api/versao/commit", { mensagem }),
+  versaoBranch: (nome, a_partir, trocar) =>
+    req("POST", "/api/versao/branch", { nome, a_partir: a_partir || null, trocar: !!trocar }),
+  versaoCheckout: (ref) => req("POST", "/api/versao/checkout", { ref }),
+  versaoDeletarBranch: (nome) => req("DELETE", `/api/versao/branch/${encodeURIComponent(nome)}`),
+  versaoMerge: (origem) => req("POST", "/api/versao/merge", { origem }),
+  versaoMergeConcluir: (mensagem) => req("POST", "/api/versao/merge/concluir", { mensagem }),
+  versaoMergeAbortar: () => req("POST", "/api/versao/merge/abortar"),
   criarAlocacao: (payload) => req("POST", "/api/alocacao", payload),
   mudarTipo: (id, tipo_alocacao) => req("PUT", `/api/alocacao/${id}/tipo`, { tipo_alocacao }),
   removerAlocacao: (id) => req("DELETE", `/api/alocacao/${id}`),

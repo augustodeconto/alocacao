@@ -594,6 +594,12 @@ def versao_log(ref: str | None = None, limite: int = 100):
             raise HTTPException(404, f"branch '{ref}' não existe")
 
 
+@app.get("/api/versao/grafo")
+def versao_grafo(limite: int = 1000):
+    with _lock:
+        return versao.grafo(_conn, limite)
+
+
 @app.post("/api/versao/commit")
 def versao_commit(payload: dict = Body(...)):
     msg = str(payload.get("mensagem") or "").strip()

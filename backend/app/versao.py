@@ -525,6 +525,17 @@ def estado_repo(conn: sqlite3.Connection) -> dict:
     }
 
 
+def grafo(conn: sqlite3.Connection, limite: int = 1000) -> dict:
+    """DAG completo (todos os commits) + estado do repo — para a UI de grafo."""
+    commits = [
+        dict(r) for r in conn.execute(
+            "SELECT commit_id, parent_id, merge_parent_id, autor, mensagem, criado_em, origem "
+            "FROM commit_ ORDER BY commit_id DESC LIMIT ?", (limite,)
+        )
+    ]
+    return {"commits": commits, **estado_repo(conn)}
+
+
 # --------------------------------------------------------------------------- #
 # merge 3-way (Fase 2)
 # --------------------------------------------------------------------------- #

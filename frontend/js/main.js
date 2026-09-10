@@ -1291,49 +1291,275 @@ async function cadLoad(tab) {
 }
 
 // ==================================================================
-//  VIEW VERSÕES (baseline por projeto)
+//  VIEW VERSÕES — grafo estilo Git
 // ==================================================================
-function renderVer() {
-  const body = $("#ver-body");
-  const projs = (S.estado?.projetos || []).slice().sort((a, b) => a.nome.localeCompare(b.nome));
-  const sujos = projs.filter((p) => p.alterado_em && (!p.exportado_em || p.alterado_em > p.exportado_em));
-  $("#ver-status").textContent = `${sujos.length} projeto(s) com alterações não exportadas`;
-  $("#ver-descartar-tudo").disabled = !sujos.length;
-  body.innerHTML = "";
-  for (const p of projs) {
-    const dirty = p.alterado_em && (!p.exportado_em || p.alterado_em > p.exportado_em);
-    const row = el("div", { className: "ver-row" + (dirty ? " sujo" : "") });
-    row.append(
-      el("div", {},
-        el("div", { className: "nome" }, p.nome),
-        el("div", { className: "meta" },
-          `alterado: ${p.alterado_em || "—"}  ·  exportado: ${p.exportado_em || "nunca"}`)),
-      el("span", { className: "tag" + (dirty ? " dirty" : "") }, dirty ? "não exportado" : "em dia"),
-      el("span", {}),
-    );
-    const acts = row.lastChild;
-    if (dirty) {
-      acts.append(el("button", {
-        title: "descartar as mudanças deste projeto (volta à baseline)",
-        textContent: "↺ descartar",
-        onclick: async () => {
-          if (!confirm(`Descartar as mudanças de "${p.nome}"?\nVolta ao estado da baseline.`)) return;
-          try { S.estado = (await api.descartarProjeto(p.projeto_id)).estado; renderVer(); render(); log("descartado"); }
-          catch (err) { log(err.message, true); }
-        },
-      }));
+const GG = { RH: 34, LW: 16, PAD: 14, R: 4 };
+const LANE_CORES = ["#2f8fed", "#e0679a", "#d9a441", "#6cc0a4", "#a077e0", "#e0796b", "#7f9cd6", "#59b36a"];
+const laneCor = (l) => LANE_CORES[((l % LANE_CORES.length) + LANE_CORES.length) % LANE_CORES.length];
+const ggX = (l) => GG.PAD + l * GG.LW;
+
+let VER = { grafo: null };
+
+async function renderVer() {
+  try {
+    VER.grafo = await api.versaoGrafo();
+    paintVer();
+  } catch (e) {
+    $("#ver-body").innerHTML = `<div class="gg-empty">falha ao renderizar versões: ${e.message}</div>`;
+    console.error(e);
+  }
+}
+
+// atribui uma "raia" (coluna) a cada commit — algoritmo de git log --graph
+function layoutGrafo(commits) {
+  let lanes = [];  // raia -> commit_id que ela está seguindo (pai esperado), ou null
+  const firstFree = () => { const k = lanes.indexOf(null); return k < 0 ? lanes.length : k; };
+  const rows = [];
+  let maxLane = 0;
+  for (const c of commits) {
+    const topLanes = lanes.slice();
+    const mine = [];
+    topLanes.forEach((v, i) => { if (v === c.commit_id) mine.push(i); });
+    const col = mine.length ? mine[0] : firstFree();
+    for (const j of mine) lanes[j] = null;
+    if (col >= lanes.length) lanes.length = col + 1;
+    lanes[col] = null;
+
+    const parents = [c.parent_id, c.merge_parent_id].filter((x) => x != null);
+    const parentCols = [];
+    if (parents.length) {
+      lanes[col] = parents[0];
+      parentCols.push({ col, cid: parents[0] });
+      for (let k = 1; k < parents.length; k++) {
+        let lc = lanes.indexOf(parents[k]);
+        if (lc < 0) lc = firstFree();
+        if (lc >= lanes.length) lanes.length = lc + 1;
+        lanes[lc] = parents[k];
+        parentCols.push({ col: lc, cid: parents[k] });
+      }
     }
+    const botLanes = lanes.slice();
+    maxLane = Math.max(maxLane, topLanes.length, botLanes.length, col + 1);
+    rows.push({ c, col, topLanes, botLanes, parentCols });
+  }
+  return { rows, lanes: Math.max(1, maxLane) };
+}
+
+function ggEdge(x0, y0, x1, y1) {
+  if (x0 === x1) return `M${x0} ${y0}L${x0} ${y1}`;
+  const my = (y0 + y1) / 2;
+  return `M${x0} ${y0}C${x0} ${my},${x1} ${my},${x1} ${y1}`;
+}
+
+function paintVer() {
+  const g = VER.grafo;
+  const body = $("#ver-body");
+  const refsPorCommit = {};
+  for (const r of g.refs) (refsPorCommit[r.commit_id] ||= []).push(r.nome);
+
+  // seletor de branch
+  const sel = $("#ver-branch");
+  sel.innerHTML = "";
+  for (const r of g.refs)
+    sel.append(el("option", { value: r.nome, textContent: r.nome, selected: r.nome === g.branch }));
+
+  const pend = g.pendente || {};
+  const totalPend = (pend.projeto || 0) + (pend.pessoa || 0) + (pend.alocacoes_novas || 0)
+    + (pend.alocacoes_removidas || 0) + (pend.celulas || 0) + (pend.janela || 0);
+  $("#ver-status").textContent = g.sujo
+    ? `${totalPend} alteração(ões) pendente(s) em ${g.branch}`
+    : `${g.branch} — em dia`;
+  $("#ver-commit").disabled = !g.sujo || !!g.merge;
+  $("#ver-descartar-tudo").disabled = !g.sujo;
+  $("#ver-branch-del").disabled = g.branch === "main" || !!g.merge;
+  $("#ver-merge").disabled = !!g.merge || g.refs.length < 2;
+  $("#ver-branch").disabled = g.sujo || !!g.merge;
+
+  // banner de merge em andamento
+  const banner = $("#ver-merge-banner");
+  if (g.merge) {
+    banner.hidden = false;
+    banner.innerHTML = "";
+    banner.append(
+      el("span", {}, `Merge de "${g.merge.origem}" em andamento — ${g.merge.resolvidos}/${g.merge.conflitos} conflitos resolvidos.`),
+      el("button", { textContent: "Concluir", disabled: g.merge.resolvidos < g.merge.conflitos,
+        onclick: async () => {
+          const m = prompt("Mensagem do commit de merge:", `Merge ${g.merge.origem} em ${g.branch}`);
+          if (m == null) return;
+          try { await api.versaoMergeConcluir(m.trim() || `Merge ${g.merge.origem}`); await recarregar(); log("merge concluído"); }
+          catch (err) { log(err.message, true); }
+        } }),
+      el("button", { textContent: "Abortar", onclick: async () => {
+        if (!confirm("Abortar o merge? As resoluções serão perdidas.")) return;
+        try { await api.versaoMergeAbortar(); await recarregar(); log("merge abortado"); }
+        catch (err) { log(err.message, true); }
+      } }),
+    );
+  } else {
+    banner.hidden = true;
+  }
+
+  // --- grafo ---
+  const commits = g.commits;
+  if (!commits.length) { body.innerHTML = `<div class="gg-empty">Sem commits.</div>`; return; }
+  const { rows, lanes } = layoutGrafo(commits);
+  const idxDe = {};
+  commits.forEach((c, i) => { idxDe[c.commit_id] = i; });
+
+  const hasWorking = g.sujo;
+  const headIdx = idxDe[g.head_commit];
+  const headCol = headIdx != null ? rows[headIdx].col : 0;
+  const offset = hasWorking ? 1 : 0;
+  const nRows = commits.length + offset;
+  const W = ggX(lanes) + 4;
+  const H = nRows * GG.RH;
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("class", "gg-svg");
+  svg.setAttribute("width", W);
+  svg.setAttribute("height", H);
+  const add = (tag, attrs) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    svg.append(e);
+    return e;
+  };
+
+  // working: nó vazado ligado ao HEAD
+  if (hasWorking && headIdx != null) {
+    const y0 = GG.RH / 2, y1 = (headIdx + 1) * GG.RH + GG.RH / 2;
+    add("path", { d: ggEdge(ggX(headCol), y0, ggX(headCol), y1), stroke: laneCor(headCol), "stroke-width": 2, fill: "none" });
+    add("circle", { cx: ggX(headCol), cy: y0, r: GG.R, fill: "var(--bg)", stroke: "var(--accent)", "stroke-width": 2, "stroke-dasharray": "2 2" });
+  }
+
+  rows.forEach((row, i) => {
+    const y = (i + offset) * GG.RH + GG.RH / 2;
+    // linhas que entram pelo topo
+    row.topLanes.forEach((v, L) => {
+      if (v == null) return;
+      if (v === row.c.commit_id) {
+        add("path", { d: ggEdge(ggX(L), y - GG.RH / 2, ggX(row.col), y), stroke: laneCor(row.col), "stroke-width": 2, fill: "none" });
+      } else {
+        let B = row.botLanes.indexOf(v);
+        if (B < 0) B = L;
+        add("path", { d: ggEdge(ggX(L), y - GG.RH / 2, ggX(B), y + GG.RH / 2), stroke: laneCor(B), "stroke-width": 2, fill: "none" });
+      }
+    });
+    // linhas que saem para os pais
+    for (const pc of row.parentCols) {
+      add("path", { d: ggEdge(ggX(row.col), y, ggX(pc.col), y + GG.RH / 2), stroke: laneCor(pc.col), "stroke-width": 2, fill: "none" });
+    }
+    // nó
+    const isHead = row.c.commit_id === g.head_commit;
+    add("circle", {
+      cx: ggX(row.col), cy: y, r: isHead ? GG.R + 1.5 : GG.R,
+      fill: laneCor(row.col),
+      stroke: isHead ? "var(--fg)" : "var(--bg)", "stroke-width": isHead ? 2 : 1.5,
+    });
+  });
+
+  // --- lista à direita ---
+  const rowsEl = el("div", { className: "gg-rows" });
+  if (hasWorking) {
+    const wr = el("div", { className: "gg-row working head" });
+    wr.append(
+      el("div", { className: "gg-msg" },
+        el("span", { className: "gg-badge branch" }, g.branch),
+        el("span", { className: "txt" }, `alterações não commitadas (${totalPend})`)),
+      el("div", { className: "gg-actions" }),
+      el("div", { className: "gg-col" }, "agora"),
+      el("div", { className: "gg-col" }, ""),
+      el("div", { className: "gg-hash" }, "•"),
+    );
+    rowsEl.append(wr);
+  }
+  for (const row of rows) {
+    const c = row.c;
+    const badges = el("span", { style: "display:flex;gap:4px;flex:0 0 auto" });
+    for (const nome of (refsPorCommit[c.commit_id] || []))
+      badges.append(el("span", { className: "gg-badge " + (nome === g.branch ? "head" : "branch") }, nome));
+    if (c.origem && c.origem !== "manual")
+      badges.append(el("span", { className: "gg-badge origem" }, c.origem));
+
+    const rd = el("div", { className: "gg-row" + (c.commit_id === g.head_commit && !hasWorking ? " head" : "") });
+    const msg = el("div", { className: "gg-msg" });
+    if (badges.childNodes.length) msg.append(badges);
+    msg.append(el("span", { className: "txt", title: c.mensagem || "" }, c.mensagem || "(sem mensagem)"));
+
+    const acts = el("div", { className: "gg-actions" });
     acts.append(el("button", {
-      title: "definir a baseline = estado atual (commit local)",
-      textContent: "⌾ commit",
-      onclick: async () => {
-        if (!confirm(`Definir a linha de base de "${p.nome}" como o estado atual?`)) return;
-        try { S.estado = (await api.marcarBaseline(p.projeto_id)).estado; renderVer(); render(); log("baseline atualizada"); }
+      textContent: "⑂ branch", title: "criar branch a partir deste commit",
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        const nome = prompt("Nome da nova branch (a partir deste commit):");
+        if (!nome) return;
+        try { await api.versaoBranch(nome.trim(), c.commit_id, true); await recarregar(); log(`branch ${nome} criada`); }
         catch (err) { log(err.message, true); }
       },
     }));
-    body.append(row);
+
+    rd.append(
+      msg,
+      acts,
+      el("div", { className: "gg-col" }, (c.criado_em || "").replace("T", " ").slice(0, 16)),
+      el("div", { className: "gg-col", title: c.autor || "" }, c.autor || "—"),
+      el("div", { className: "gg-hash" }, "#" + c.commit_id),
+    );
+    rowsEl.append(rd);
   }
+
+  body.innerHTML = "";
+  const grid = el("div", { className: "gg" }, svg, rowsEl);
+  body.append(grid);
+}
+
+async function recarregar() {
+  S.estado = await api.estado();
+  render();
+  await renderVer();
+}
+
+async function verCommit() {
+  const m = prompt("Mensagem do commit:");
+  if (m == null) return;
+  if (!m.trim()) { log("mensagem obrigatória", true); return; }
+  try { await api.versaoCommit(m.trim()); await recarregar(); log("commit criado"); }
+  catch (err) { log(err.message, true); }
+}
+async function verNovaBranch() {
+  const nome = prompt("Nome da nova branch (a partir do HEAD):");
+  if (!nome) return;
+  try { await api.versaoBranch(nome.trim(), null, true); await recarregar(); log(`branch ${nome} criada`); }
+  catch (err) { log(err.message, true); }
+}
+async function verCheckout(ref) {
+  if (!ref || ref === (VER.grafo && VER.grafo.branch)) return;
+  try { await api.versaoCheckout(ref); await recarregar(); log(`agora em ${ref}`); }
+  catch (err) { log(err.message, true); renderVer(); }   // renderVer p/ reverter o select
+}
+async function verMerge() {
+  const g = VER.grafo;
+  const outras = g.refs.map((r) => r.nome).filter((n) => n !== g.branch);
+  const origem = prompt(`Trazer qual branch para "${g.branch}"?\n(${outras.join(", ")})`, outras[0] || "");
+  if (!origem) return;
+  try {
+    const res = await api.versaoMerge(origem.trim());
+    await recarregar();
+    log({ "em-dia": "já está em dia", "fast-forward": "fast-forward", ok: "merge ok",
+          conflito: `merge com ${(res.conflitos || []).length} conflito(s) — resolva na grade` }[res.status] || "merge");
+  } catch (err) { log(err.message, true); }
+}
+async function verDeletarBranch() {
+  const g = VER.grafo;
+  if (!confirm(`Apagar a branch "${g.branch}"? (o histórico dela some se não estiver mergeada)`)) return;
+  try { await api.versaoDeletarBranch(g.branch); await recarregar(); log("branch apagada"); }
+  catch (err) { log(err.message, true); }
+}
+async function verDescartar() {
+  if (!confirm("Descartar TODAS as alterações pendentes?\nEquivale a `git reset --hard` no HEAD.")) return;
+  try { S.estado = (await api.descartarTudo()).estado; render(); await renderVer(); log("alterações descartadas"); }
+  catch (err) { log(err.message, true); }
 }
 
 // -- init ---------------------------------------------------------
@@ -1395,12 +1621,13 @@ function wire() {
   $("#cad-busca").addEventListener("input", cadFilter);
   $("#cad-novo").onclick = openNovoProjeto;
 
-  // ---- view Versões ----
-  $("#ver-descartar-tudo").onclick = async () => {
-    if (!confirm("Descartar TODAS as mudanças de TODOS os projetos?\nTudo volta ao estado da baseline (BI).")) return;
-    try { S.estado = (await api.descartarTudo()).estado; log("mudanças descartadas"); renderVer(); render(); }
-    catch (err) { log(err.message, true); }
-  };
+  // ---- view Versões (grafo Git) ----
+  $("#ver-commit").onclick = verCommit;
+  $("#ver-branch-novo").onclick = verNovaBranch;
+  $("#ver-merge").onclick = verMerge;
+  $("#ver-branch-del").onclick = verDeletarBranch;
+  $("#ver-descartar-tudo").onclick = verDescartar;
+  $("#ver-branch").onchange = (e) => verCheckout(e.target.value);
 
   // ---- barra direita (rail + painéis) ----
   for (const b of document.querySelectorAll(".secrail-btn[data-panel]"))

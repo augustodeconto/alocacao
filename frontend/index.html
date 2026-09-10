@@ -131,10 +131,23 @@
 
     <section id="view-ver" class="view" hidden>
       <div id="ver-toolbar">
-        <button id="ver-descartar-tudo" title="descartar TODAS as mudanças (volta à baseline)">↺ Descartar tudo</button>
+        <span class="tb-group">
+          <label for="ver-branch" class="tb-lbl">branch</label>
+          <select id="ver-branch" title="trocar de branch (checkout)"></select>
+        </span>
+        <span class="tb-sep"></span>
+        <div class="tb-group">
+          <button id="ver-commit" title="commitar as alterações pendentes">✔&nbsp;Commit…</button>
+          <button id="ver-branch-novo" title="criar branch a partir do HEAD">⑂&nbsp;Nova branch…</button>
+          <button id="ver-merge" title="trazer outra branch para a atual">⇄&nbsp;Merge…</button>
+          <button id="ver-branch-del" class="sq" title="apagar a branch atual">🗑</button>
+        </div>
+        <span class="tb-sep"></span>
+        <button id="ver-descartar-tudo" title="descartar TODAS as alterações pendentes (reset --hard)">↺&nbsp;Descartar</button>
         <span class="tb-spacer"></span>
         <span class="status" id="ver-status"></span>
       </div>
+      <div id="ver-merge-banner" hidden></div>
       <div class="ver-scroll" id="ver-body"></div>
     </section>
   </main>
