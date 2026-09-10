@@ -1460,10 +1460,20 @@ function paintVer() {
 
   // --- lista à direita ---
   const rowsEl = el("div", { className: "gg-rows" });
-  const marcarSel = (key) => {
-    for (const x of rowsEl.querySelectorAll(".gg-row.sel")) x.classList.remove("sel");
-    const t = rowsEl.querySelector(`.gg-row[data-sel="${key}"]`);
-    if (t) t.classList.add("sel");
+  VER.rowsEl = rowsEl;
+
+  const chave = (id) => (id == null ? "working" : "c" + id);
+  const cliqueCommit = (id, ev) => {
+    const combinar = ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey);
+    if (combinar && VER.sel && VER.sel.para !== id) {
+      // compara os dois: para = mais novo (working, ou maior id), de = mais antigo
+      let a = VER.sel.para, b = id;
+      if (a == null) selecionarVer({ de: b, para: null });          // working vs commit
+      else if (b == null) selecionarVer({ de: a, para: null });
+      else selecionarVer({ de: Math.min(a, b), para: Math.max(a, b) });
+    } else {
+      selecionarVer({ de: null, para: id });
+    }
   };
 
   if (hasWorking) {
@@ -1476,7 +1486,7 @@ function paintVer() {
       el("div", { className: "gg-col" }, ""),
       el("div", { className: "gg-hash" }, "•"),
     );
-    wr.onclick = () => { VER.sel = { para: null }; marcarSel("working"); carregarDiff({}); };
+    wr.onclick = (ev) => cliqueCommit(null, ev);
     rowsEl.append(wr);
   }
   for (const row of rows) {
@@ -1505,7 +1515,7 @@ function paintVer() {
       el("div", { className: "gg-col", title: c.autor || "" }, c.autor || "—"),
       el("div", { className: "gg-hash" }, "#" + c.commit_id),
     );
-    rd.onclick = () => { VER.sel = { para: c.commit_id }; marcarSel("c" + c.commit_id); carregarDiff({ para: c.commit_id }); };
+    rd.onclick = (ev) => cliqueCommit(c.commit_id, ev);
     rd.oncontextmenu = (ev) => { ev.preventDefault(); ctxCommit(c, ev); };
     rowsEl.append(rd);
   }
@@ -1513,14 +1523,28 @@ function paintVer() {
   body.innerHTML = "";
   body.append(el("div", { className: "gg" }, svg, rowsEl));
 
-  // seleção / diff inicial
-  const want = VER.sel && "para" in VER.sel ? VER.sel : { para: hasWorking ? null : g.head_commit };
-  const key = want.para == null ? "working" : "c" + want.para;
-  const still = rowsEl.querySelector(`.gg-row[data-sel="${key}"]`);
-  VER.sel = still ? want : { para: hasWorking ? null : g.head_commit };
-  const k2 = VER.sel.para == null ? "working" : "c" + VER.sel.para;
-  marcarSel(k2);
-  carregarDiff(VER.sel.para == null ? {} : { para: VER.sel.para });
+  // seleção / diff inicial: mantém a de antes se os commits ainda existem
+  let want = VER.sel;
+  const existe = (id) => id == null ? hasWorking : rowsEl.querySelector(`.gg-row[data-sel="c${id}"]`);
+  if (!want || !existe(want.para) || (want.de != null && !existe(want.de)))
+    want = { de: null, para: hasWorking ? null : g.head_commit };
+  selecionarVer(want);
+}
+
+// aplica VER.sel: marca as linhas e carrega o diff correspondente
+function selecionarVer(sel) {
+  VER.sel = { de: sel.de ?? null, para: "para" in sel ? sel.para : null };
+  const rowsEl = VER.rowsEl;
+  if (rowsEl) {
+    for (const x of rowsEl.querySelectorAll(".sel, .sel2")) x.classList.remove("sel", "sel2");
+    const p = rowsEl.querySelector(`.gg-row[data-sel="${VER.sel.para == null ? "working" : "c" + VER.sel.para}"]`);
+    if (p) p.classList.add("sel");
+    if (VER.sel.de != null) {
+      const dq = rowsEl.querySelector(`.gg-row[data-sel="c${VER.sel.de}"]`);
+      if (dq) dq.classList.add("sel2");
+    }
+  }
+  carregarDiff({ de: VER.sel.de, para: VER.sel.para });
 }
 
 // ---- diff pane -------------------------------------------------------
@@ -1537,10 +1561,23 @@ async function carregarDiff({ de, para } = {}) {
 
 function paintDiff(d) {
   const p = d.para, dd = d.de;
-  $("#vd-msg").textContent = p.commit_id == null ? "Alterações não commitadas" : `#${p.commit_id} · ${p.mensagem || "(sem mensagem)"}`;
-  $("#vd-sub").textContent =
-    (p.commit_id == null ? "" : `${p.autor || "—"} · ${(p.criado_em || "").replace("T", " ").slice(0, 16)} · `)
-    + `comparado com ${dd.commit_id == null ? dd.mensagem : "#" + dd.commit_id}`;
+  const explicito = VER.sel && VER.sel.de != null;
+  const alvo = p.commit_id == null ? "working" : "#" + p.commit_id;
+  const base = dd.commit_id == null ? dd.mensagem : "#" + dd.commit_id;
+  $("#vd-msg").textContent = explicito
+    ? `${base}  →  ${alvo}`
+    : (p.commit_id == null ? "Alterações não commitadas" : `#${p.commit_id} · ${p.mensagem || "(sem mensagem)"}`);
+  const sub = $("#vd-sub");
+  sub.textContent =
+    (p.commit_id == null || explicito ? "" : `${p.autor || "—"} · ${(p.criado_em || "").replace("T", " ").slice(0, 16)} · `)
+    + (explicito ? `${d.resumo.celulas + d.resumo.projetos + d.resumo.pessoas + d.resumo.janela} alterações entre os dois`
+                 : `comparado com ${base}`);
+  if (explicito) {
+    sub.append(el("button", {
+      className: "vd-reset", textContent: " ↩ vs pai",
+      onclick: () => selecionarVer({ de: null, para: p.commit_id }),
+    }));
+  }
 
   const r = d.resumo;
   const bd = $("#vd-body");
@@ -1641,11 +1678,21 @@ function ctxCommit(c, ev) {
     if (nome !== g.branch)
       items.push({ label: `↪ Ir para "${nome}"`, onClick: () => verCheckout(nome) });
   items.push({ label: "⑂ Criar branch aqui…", onClick: () => criarBranchDe(c) });
-  items.push({ label: "⇆ Ver alterações (vs pai)", onClick: () => {
-    VER.sel = { para: c.commit_id }; carregarDiff({ para: c.commit_id });
-    for (const x of document.querySelectorAll(".gg-row.sel")) x.classList.remove("sel");
-    const t = document.querySelector(`.gg-row[data-sel="c${c.commit_id}"]`); if (t) t.classList.add("sel");
-  } });
+  items.push({ sep: true });
+  items.push({ label: "⇆ Ver alterações (vs pai)",
+    onClick: () => selecionarVer({ de: null, para: c.commit_id }) });
+  // comparar com o commit já selecionado (se for outro)
+  const outro = VER.sel && VER.sel.de == null ? VER.sel.para : null;
+  if (outro != null && outro !== c.commit_id)
+    items.push({
+      label: `⇆ Comparar com #${outro}`,
+      onClick: () => selecionarVer({ de: Math.min(outro, c.commit_id), para: Math.max(outro, c.commit_id) }),
+    });
+  if (VER.grafo.sujo)
+    items.push({
+      label: "⇆ Comparar com o working",
+      onClick: () => selecionarVer({ de: c.commit_id, para: null }),
+    });
   items.push({ sep: true });
   items.push({ label: "⧉ Copiar #id", onClick: () => {
     navigator.clipboard && navigator.clipboard.writeText("#" + c.commit_id);
