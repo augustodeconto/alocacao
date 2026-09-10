@@ -363,25 +363,42 @@ function render() {
   }
 }
 
-// identidade de GP do projeto: nome do gestor se conhecido, senão a matrícula GP
-function gpDe(proj) {
-  return proj && (proj.gestor_projetos || proj.matricula_gp) || "";
+// -- filtro de GP: a CHAVE é a matrícula do GP; o nome é só rótulo ----
+const GP_SEM = "__sem_gp__";                 // valor da opção "— sem GP —"
+function gpDe(proj) { return (proj && proj.matricula_gp) || ""; }   // matrícula, ou "" se não tem
+
+function gpNome(mat) {
+  if (!mat) return "(sem GP)";
+  const pe = (S.estado.pessoas || []).find((p) => p.matricula === mat);
+  if (pe && pe.nome) return pe.nome;
+  const pr = (S.estado.projetos || []).find((p) => p.matricula_gp === mat && p.gestor_projetos);
+  return (pr && pr.gestor_projetos) || mat;   // sem nome conhecido: mostra a própria matrícula
 }
+
 function gpVisivel(proj) {
-  return !S.gpFilter || gpDe(proj) === S.gpFilter;
+  if (!S.gpFilter) return true;
+  if (S.gpFilter === GP_SEM) return !gpDe(proj);
+  return gpDe(proj) === S.gpFilter;
 }
-function projetoIdGestor() {
-  const m = {};
-  for (const p of S.estado.projetos) m[p.projeto_id] = gpDe(p);
-  return m;
-}
+
 function refreshGpFilter() {
   const sel = $("#gp-filter");
-  const gps = [...new Set(S.estado.projetos.map(gpDe).filter(Boolean))].sort();
+  const mats = [...new Set(S.estado.projetos.map(gpDe).filter(Boolean))]
+    .sort((a, b) => gpNome(a).localeCompare(gpNome(b)));
+  const temSem = S.estado.projetos.some((p) => !gpDe(p));
   sel.innerHTML = "";
   sel.append(el("option", { value: "", textContent: "Todos os GPs" }));
-  for (const g of gps) sel.append(el("option", { value: g, textContent: g, selected: g === S.gpFilter }));
-  if (S.gpFilter && !gps.includes(S.gpFilter)) { S.gpFilter = ""; localStorage.setItem("gpFilter", ""); }
+  if (temSem) sel.append(el("option", { value: GP_SEM, textContent: "— sem GP —" }));
+  for (const m of mats) {
+    const nome = gpNome(m);
+    sel.append(el("option", {
+      value: m, selected: m === S.gpFilter,
+      textContent: nome === m ? m : `${nome}  ·  ${m}`,
+    }));
+  }
+  const validos = new Set(["", GP_SEM, ...mats]);
+  if (!validos.has(S.gpFilter)) { S.gpFilter = ""; localStorage.setItem("gpFilter", ""); }
+  sel.value = S.gpFilter;
 }
 
 // -- undo/redo de edições de célula -------------------------------------
