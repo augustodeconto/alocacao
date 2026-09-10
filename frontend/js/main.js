@@ -1847,26 +1847,29 @@ function wire() {
   });
 }
 
-// -- marca de ambiente (prod vs dev) --------------------------------
-const ENV_INFO = {
-  prod: { cor: "#c0392b", nome: "PRODUÇÃO" },
-  dev:  { cor: "#d98a1f", nome: "DESENVOLVIMENTO" },
-  test: { cor: "#d98a1f", nome: "TESTE" },
-};
+// -- marca de ambiente ---------------------------------------------
+// Produção = ambiente final, sem marca nenhuma. Qualquer coisa que NÃO
+// seja produção ganha uma moldura âmbar + badge.
 function applyAmbiente(amb) {
   const env = ((amb && amb.env) || "").toLowerCase();
-  const m = ENV_INFO[env] || { cor: "#5b7a9e", nome: env ? env.toUpperCase() : "AMBIENTE?" };
-  document.documentElement.style.setProperty("--env-cor", m.cor);
-  document.body.dataset.env = env || "?";
-  let frame = document.getElementById("env-frame");
-  if (!frame) {
-    frame = el("div", { id: "env-frame" }, el("span", { className: "env-badge" }));
-    document.body.append(frame);
+  const frame = document.getElementById("env-frame");
+  if (env === "prod") {
+    if (frame) frame.remove();
+    document.documentElement.style.removeProperty("--env-cor");
+    document.body.dataset.env = "prod";
+    document.title = "Planejamento de Alocação";
+    return;
   }
-  frame.querySelector(".env-badge").textContent =
-    m.nome + (amb && amb.db ? "  ·  " + amb.db : "");
-  document.title = (env === "prod" || !env ? "" : `[${m.nome.slice(0, 3)}] `)
-    + "Planejamento de Alocação";
+  const nome = { dev: "DESENVOLVIMENTO", test: "TESTE" }[env] || (env ? env.toUpperCase() : "NÃO-PRODUÇÃO");
+  document.documentElement.style.setProperty("--env-cor", "#d98a1f");
+  document.body.dataset.env = env || "?";
+  let f = frame;
+  if (!f) {
+    f = el("div", { id: "env-frame" }, el("span", { className: "env-badge" }));
+    document.body.append(f);
+  }
+  f.querySelector(".env-badge").textContent = nome + (amb && amb.db ? "  ·  " + amb.db : "");
+  document.title = `[${nome.slice(0, 3)}] Planejamento de Alocação`;
 }
 
 async function boot() {
