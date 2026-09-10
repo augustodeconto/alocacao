@@ -85,7 +85,9 @@ remuneracao, inicio_vigencia, ativo`), `catalogo` (`tipo`, `id`, `texto`), `anot
 ### Versionamento estilo Git (`user_version = 2`)
 
 Grafo global de commits (um snapshot do plano inteiro por commit). Detalhe e desvios em
-[`docs/VERSIONAMENTO.md`](VERSIONAMENTO.md); módulo `backend/app/versao.py`.
+[`docs/VERSIONAMENTO.md`](VERSIONAMENTO.md); módulo `backend/app/versao.py`. A camada
+multiusuário (rascunhos por autor/branch, identidade, edição no cliente) está planejada em
+[`docs/COLABORACAO.md`](COLABORACAO.md) — ainda não implementada.
 
 - **Grafo:** `commit_(commit_id, parent_id, merge_parent_id, autor, mensagem, criado_em,
   origem)`, `ref_(nome → commit_id)` (`main` + branches de cenário), `head_` (branch
@@ -419,6 +421,12 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-09** — **Plano multiusuário** ([`docs/COLABORACAO.md`](COLABORACAO.md), não
+  implementado). Sem cópia local. Identidade sem login (`X-Autor`). Larga o `checkout`:
+  trabalha-se *a partir de um commit*, salva-se *como commit*, comunicação por número de
+  commit. Rascunho autorado no cliente e **autossalvo** no servidor (`rascunho` por
+  `(autor, branch)`, edit-set JSON, debounce 3 s). Branches compartilhadas e visíveis.
+  Salvar = commit de 1 pai (3-way vs. o topo da branch). `head_` e `working` editável saem.
 - **2026-09-09** — **Merge 3-way (Fase 2 do versionamento).** `versao.merge(origem)`:
   fast-forward quando possível, senão 3-way contra o LCA no DAG. Conflito por célula
   (`mes`) / linha (`projeto`/`pessoa`) → `merge_conflito`; `merge_estado` = `MERGE_HEAD`.
