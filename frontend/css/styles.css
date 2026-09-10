@@ -18,6 +18,8 @@
   --rail-fg: #aeb6c2;
   --ok: #2c8a4a;
   --err: #b3261e;
+  --sb-thumb: #c4cad3;
+  --sb-thumb-hover: #a6adb8;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -42,6 +44,8 @@
     --rail-fg: #8b93a1;
     --ok: #5aa56f;
     --err: #e2867d;
+    --sb-thumb: #3a424e;
+    --sb-thumb-hover: #4c5563;
   }
 }
 :root[data-theme="dark"] {
@@ -64,9 +68,23 @@
   --rail-fg: #8b93a1;
   --ok: #5aa56f;
   --err: #e2867d;
+  --sb-thumb: #3a424e;
+  --sb-thumb-hover: #4c5563;
 }
 
 * { box-sizing: border-box; }
+
+/* barras de rolagem seguem o tema (Firefox + Chrome/Safari) */
+* { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; }
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb); border-radius: 8px;
+  border: 3px solid transparent; background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 body {
   margin: 0; color: var(--fg); background: var(--bg); font-size: 13px;
   height: 100vh; display: flex; flex-direction: column; overflow: hidden;
