@@ -68,8 +68,16 @@ def _catalogos() -> dict:
     return out
 
 
+# valor_hora / remuneracao ficam no banco (relatório de custo) mas NUNCA vão pro cliente
+_PESSOA_PUB = (
+    "matricula, nome, carga_diaria, capacidade_mensal, ativo, situacao, equipe, area, "
+    "tipo_contrato, inicio_contrato, fim_contrato, formacao, id_filial, inicio_vigencia"
+)
+
+
 def _pessoas() -> list[dict]:
-    return [dict(r) for r in _conn.execute("SELECT * FROM pessoa ORDER BY nome")]
+    return [dict(r) for r in _conn.execute(
+        f"SELECT {_PESSOA_PUB} FROM pessoa ORDER BY nome")]
 
 
 def _projetos() -> list[dict]:
@@ -192,6 +200,26 @@ async def importar_upload(arquivos: list[UploadFile] = File(...)):
                                    "detail": "não reconhecido (nem projeto, nem extrato do BI)"})
         if bi_pendentes:
             resultados.extend(bi_importar(_conn, bi_pendentes))
+        return {"resultados": resultados, "estado": _estado()}
+
+
+@app.post("/api/importar-projeto")
+async def importar_projeto(arquivos: list[UploadFile] = File(...)):
+    """Só planilha de projeto → working. Extrato do BI aqui é recusado (use /api/importar-bi)."""
+    recebidos = [(uf.filename or "arquivo.xlsx", await uf.read()) for uf in arquivos]
+    with _lock:
+        resultados: list[dict] = []
+        for nome, data in recebidos:
+            dest = _unique_path(UPLOAD_DIR / Path(nome).name)
+            dest.write_bytes(data)
+            if not is_project_workbook(dest):
+                dest.unlink(missing_ok=True)
+                resultados.append({"status": "skipped", "nome": nome,
+                                   "detail": "não é planilha de projeto — para o BI use “Importar do BI”"})
+                continue
+            r = import_workbook(_conn, str(dest)).as_dict()
+            r["nome"] = nome
+            resultados.append(r)
         return {"resultados": resultados, "estado": _estado()}
 
 

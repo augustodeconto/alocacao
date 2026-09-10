@@ -104,8 +104,12 @@ multiusuário (rascunhos por autor/branch, identidade, edição no cliente) est�
   (`mes`) ou linha (`projeto`/`pessoa`) vai para `merge_conflito`; `merge_estado` guarda o
   merge em andamento; `resolver_conflito` (`ours`/`theirs`/valor) aplica no working;
   `concluir_merge` grava o commit de 2 pais (`origem='merge'`); `abortar_merge` desfaz.
-- **Import e export não commitam** — deixam mudanças pendentes. O rebuild do BI move o
-  cache e registra **um** commit `origem='bi'`.
+- **Import de planilha de projeto e export não commitam** — deixam mudanças pendentes no
+  working. **Import do BI** = recarga da baseline: monta o estado completo do BI e grava
+  **um commit na `main`** (`origem='bi'`, `autor='BI'`), pegando os valores do BI como
+  estão, sem 3-way. Não encosta no working de ninguém — as edições de **alocação/janela**
+  pendentes são reancoradas por cima do BI novo (campos de pessoa/projeto pertencem ao BI:
+  se o extrato traz, o BI ganha).
 - O export continua saindo **do diff working × HEAD**: alocação sumida → linha zerada;
   nunca-no-HEAD e ausente → não sai; pessoa alterada → `Novos_Pesquisadores`.
 
@@ -113,21 +117,36 @@ Esquema completo em `backend/app/db.py`.
 
 ## 4. Importação (`.xlsx` → banco)
 
-1. **Upload de arquivo(s)** pelo navegador (`POST /api/importar-upload`, multipart) —
-   funciona de qualquer máquina na rede. Os bytes são gravados em `uploads/` e esse
-   caminho vira o `arquivo_origem` (base da exportação). *(Também existe
-   `POST /api/importar` por caminho de pasta do servidor, para uso em localhost /
-   automação.)*
-2. Por arquivo: parse das 4 abas → escreve o **working** desse projeto; guarda `arquivo_origem`.
-3. **Projeto novo** (não existe `id_projeto_externo`) → cria + captura a **baseline**
-   (o arquivo é a base inicial).
-   **Projeto já existente** (veio do BI ou de import anterior) → **atualiza o working**
-   (zera e recria a alocação com o conteúdo do arquivo, atualiza os campos e a janela de
-   meses) — a **baseline não é tocada** (ela é do BI). Status do resultado: `updated`.
-   *(Fluxo: BI → baseline; arquivo Excel por projeto → working.)*
-4. Comentários da `Alocacao` → `anotacao`; catálogos de `Planilha4` → `catalogo`;
-   `cargahoraria Diária` de `Novos_Pesquisadores` → semeia `pessoa.carga_diaria` e
+Dois botões, dois caminhos:
+
+### 4a. Planilha de projeto → `POST /api/importar-projeto` (ou o `importar-upload` esperto)
+1. Upload pelo navegador (multipart). Os bytes vão para `uploads/` e o caminho vira o
+   `arquivo_origem` (base da exportação).
+2. Parse das 4 abas → escreve o **working** daquele projeto (zera e recria a alocação com o
+   conteúdo do arquivo, atualiza campos e janela de meses). Status `imported` (novo) /
+   `updated`. **Não commita** — fica pendente até um commit explícito.
+3. Comentários da `Alocacao` → `anotacao`; catálogos de `Planilha4` → `catalogo`;
+   `cargahoraria Diária` de `Novos_Pesquisadores` → `pessoa.carga_diaria` +
    `capacidade_mensal = carga_diaria × 22`.
+
+### 4b. Extratos do BI → `POST /api/importar-bi`
+Recarga da baseline, **sempre igual**: monta o estado completo do BI (`bi_custo` →
+alocação/janela; `colabs` → campos de `pessoa`; `projetos` → campos de `projeto`;
+`colabmescusto` → `valor_hora`) e grava **um commit na `main`** (`origem='bi'`,
+`autor='BI'`), pegando os valores do BI **como estão** — não há 3-way, não há tela de
+conflito. Para o que o BI cobre, o BI ganha.
+- `bi_projeto` / `bi_custo` são staging (não versionados).
+- **Não encosta no working de ninguém.** `importar_arquivos` fotografa o working antes e,
+  depois do commit, reaplica só as edições de **alocação/janela** pendentes por cima do
+  estado do BI — elas seguem visíveis como diff. Edições de campo de pessoa/projeto **não**
+  são reancoradas (pertencem ao BI).
+- `valor_hora` só é atualizado se o `colabmescusto` está no lote; senão fica intocado.
+- Recarregar o BID no decorrer do projeto = repetir isto: cada refresh = um commit na `main`.
+- Se o HEAD (legado) está numa **branch de cenário** na hora do import do BI: o commit vai
+  pra `main` mesmo assim, e o cache/working da branch são **restaurados** ao estado de antes
+  (a branch não mexe). Projetos/pessoas novos que o BI criou passam a existir e aparecem
+  como pendentes ("novo") na branch até um `merge main` — é o sinal de que há novidade do BI
+  a incorporar.
 
 ## 5. Exportação (banco → `.xlsx`)
 
@@ -421,6 +440,16 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-10** — **Import do BI = recarga da baseline, sempre igual.** Monta o estado
+  completo do BI e grava **um commit na `main`** (`origem='bi'`, `autor='BI'`, sem 3-way).
+  Não encosta no working de ninguém — `importar_arquivos` fotografa o working e reancora só
+  as edições de alocação/janela pendentes (campos de pessoa/projeto pertencem ao BI). HEAD
+  numa branch de cenário → o commit ainda vai pra `main` e a branch é restaurada.
+  `versao.commitar_estado_bi` / `escrever_working` / `aplicar_delta`. Dois botões de import:
+  **Importar do BI** (`/api/importar-bi`) e **Importar planilha de projeto**
+  (`/api/importar-projeto`, recusa extrato do BI). `valor_hora` / `remuneracao` deixaram de
+  vazar em `/api/estado` (whitelist `_PESSOA_PUB`); `valor_hora` só muda com `colabmescusto`
+  no lote.
 - **2026-09-09** — **Multiusuário: backend** ([`docs/COLABORACAO.md`](COLABORACAO.md)).
   Tabelas `usuario` (identidade sem login) e `rascunho` (um por `autor`×branch, edit-set
   JSON). `versao.commitar_rascunho`: promove um rascunho a commit de 1 pai via 3-way contra

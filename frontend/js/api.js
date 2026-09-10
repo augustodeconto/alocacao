@@ -16,16 +16,19 @@ export const api = {
   estado: () => req("GET", "/api/estado"),
   varrer: (pasta) => req("GET", `/api/varrer?pasta=${encodeURIComponent(pasta)}`),
   importar: (payload) => req("POST", "/api/importar", payload),
-  importarUpload: async (fileList) => {
+  _upload: async (url, fileList) => {
     const fd = new FormData();
     for (const f of fileList) fd.append("arquivos", f, f.name);
-    const r = await fetch("/api/importar-upload", { method: "POST", body: fd });
+    const r = await fetch(url, { method: "POST", body: fd });
     const txt = await r.text();
     let data = null;
     try { data = txt ? JSON.parse(txt) : null; } catch { data = { detail: txt }; }
     if (!r.ok) throw new Error((data && data.detail) || `HTTP ${r.status}`);
     return data;
   },
+  importarUpload: (fileList) => api._upload("/api/importar-upload", fileList),
+  importarProjeto: (fileList) => api._upload("/api/importar-projeto", fileList),
+  importarBI: (fileList) => api._upload("/api/importar-bi", fileList),
   downloadUrl: (id) => `/api/projetos/${id}/download`,
   criarProjeto: (payload) => req("POST", "/api/projetos", payload),
   removerProjeto: (id) => req("DELETE", `/api/projetos/${id}`),

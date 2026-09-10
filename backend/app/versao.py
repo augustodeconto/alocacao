@@ -293,9 +293,9 @@ def _cache_set(conn: sqlite3.Connection, E: dict, escopo: int | None) -> None:
                 (mat, *[row[c] for c in PESSOA_COLS]))
 
 
-def aplicar_ao_working(conn: sqlite3.Connection, E: dict, escopo: int | None = None) -> None:
-    """Escreve o estado E no working. Alocação/mês/janela: substituição total no
-    escopo. projeto/pessoa: upsert (nunca apaga linha) e só no descarte global."""
+def escrever_working(conn: sqlite3.Connection, E: dict, escopo: int | None = None) -> None:
+    """Escreve o estado E **só no working** (não toca no cache). Alocação/mês/janela:
+    substituição total no escopo. projeto/pessoa: upsert (nunca apaga linha)."""
     def dentro(pid: int) -> bool:
         return escopo is None or pid == escopo
 
@@ -334,7 +334,40 @@ def aplicar_ao_working(conn: sqlite3.Connection, E: dict, escopo: int | None = N
             conn.execute("INSERT INTO projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)",
                          (pid, p, o))
 
+
+def aplicar_ao_working(conn: sqlite3.Connection, E: dict, escopo: int | None = None) -> None:
+    """Escreve E no working **e** no cache (usado por checkout / descartar)."""
+    escrever_working(conn, E, escopo)
     _cache_set(conn, E, escopo)
+
+
+def aplicar_delta(E: dict, d: dict) -> dict:
+    """Devolve E com o delta `d` (formato de `_delta`) aplicado por cima."""
+    out = {k: dict(E[k]) for k in ("projeto", "pessoa", "alocacao", "mes", "periodo")}
+    for (pid, row) in d["projeto"]:
+        out["projeto"][pid] = row
+    for (mat, row) in d["pessoa"]:
+        out["pessoa"][mat] = row
+    for k in d["aloc_add"]:
+        out["alocacao"][k] = True
+    for k in d["aloc_del"]:
+        out["alocacao"].pop(k, None)
+        for mk in [mk for mk in out["mes"] if mk[:3] == k]:
+            out["mes"].pop(mk, None)
+    for (k, v) in d["mes"]:
+        if v and v > 0:
+            out["mes"][k] = v
+        else:
+            out["mes"].pop(k, None)
+    for (k, o) in d["per_set"]:
+        out["periodo"][k] = o
+    for k in d["per_del"]:
+        out["periodo"].pop(k, None)
+    out["mes"] = {
+        k: v for k, v in out["mes"].items()
+        if v and v > 0 and (k[0], k[1], k[2]) in out["alocacao"]
+    }
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -435,6 +468,29 @@ def commit_transicao_cache(conn: sqlite3.Connection, mensagem: str, origem: str,
 
 def snapshot_cache(conn: sqlite3.Connection) -> dict:
     return _estado_cache(conn)
+
+
+def commitar_estado_bi(conn: sqlite3.Connection, mensagem: str) -> int | None:
+    """Commit **na `main`** = estado atual do cache (montado pelo rebuild do BI).
+    Sempre `main`, sempre `origem='bi'`, sem 3-way — o BI é a autoridade do que cobre.
+    Não toca em working/rascunho de ninguém. Se o HEAD legado está na `main`,
+    avança `head_.base_commit_id` junto (o cache já reflete o BI)."""
+    parent = tip_commit(conn, "main")
+    d = _delta(materializar(conn, parent), _estado_cache(conn))
+    if _delta_vazio(d):
+        return None
+    cid = conn.execute(
+        "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
+        "VALUES (?, NULL, 'BI', ?, ?, 'bi')",
+        (parent, mensagem, _now()),
+    ).lastrowid
+    _grava_chg(conn, cid, d)
+    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome='main'", (cid,))
+    hrow = conn.execute("SELECT ref_nome FROM head_ WHERE id=1").fetchone()
+    if hrow and hrow["ref_nome"] == "main":
+        conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (cid,))
+    conn.commit()
+    return cid
 
 
 def descartar(conn: sqlite3.Connection, projeto_id: int | None = None) -> None:

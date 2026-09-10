@@ -104,17 +104,21 @@ all comment parts, and leaves everything else byte-for-byte (styles, `dataValida
 dropdowns, `Planilha4` catalogs, `dados_projeto` template rows). Excel date serials use
 epoch 1899-12-30 (`serial_to_date` / `date_to_serial`).
 
-### Three import paths (all via `POST /api/importar-upload`, routed by sheet content)
-1. **Per-project `.xlsx`** (`dados_projeto` + `Alocacao` + `Planilha4`) → `xlsx_import.py` →
-   updates **working only** (replaces that project's allocations). Never commits — status
-   `updated` (existing) or `imported` (new); the change stays pending until `versao.commit`.
-2. **BI extracts** → `bi_import.py`. BI is the **authority of the baseline**:
-   `colabmescusto.xlsx` rebuilds `baseline_alocacao*` for all months (jan/2025→jun/2028) and
-   derives `pessoa.valor_hora`; `colabs.xlsx` → `pessoa` fields; `projetos.xlsx` → `projeto`
-   + `bi_projeto` (all ~123 projects). Working edits are kept; a project with empty working
-   gets a copy of its rebuilt baseline. Name→matricula match is accent-stripped; ambiguous
-   → prefer Ativo, then higher matricula.
-3. `bi_custo` / `bi_projeto` are **raw staging tables, not versioned**.
+### Two import paths (two buttons; `/api/importar-upload` still sniffs+routes)
+1. **Per-project `.xlsx`** (`dados_projeto` + `Alocacao` + `Planilha4`) → `POST /api/importar-projeto`
+   → `xlsx_import.py` → updates **working only** (replaces that project's allocations). Never
+   commits — status `updated`/`imported`; pending until an explicit commit.
+2. **BI extracts** → `POST /api/importar-bi` → `bi_import.importar_arquivos`. Every refresh is
+   the same: build the full BI state → **one commit on `main`** (`origem='bi'`, `autor='BI'`,
+   no 3-way — BI wins for what it covers), via `versao.commitar_estado_bi`. `importar_arquivos`
+   snapshots the working first and, after the commit, re-applies only the pending
+   **allocation/window** edits on top of the BI state (pessoa/projeto field edits are NOT
+   re-anchored — BI owns them). `bi_custo`/`bi_projeto` = staging, not versioned.
+   Name→matricula match is accent-stripped; ambiguous → prefer Ativo, then higher matricula.
+3. **`valor_hora` / `remuneracao`** live in `pessoa`/`base_pessoa`/`chg_pessoa` (the cost
+   report needs them) but are **stripped from `/api/estado`** — `main._pessoas()` uses the
+   `_PESSOA_PUB` column whitelist; `cadastros.py` already excludes them. `valor_hora` is only
+   set when `colabmescusto` is in the import batch.
 
 ### `aggregate.py`
 `build_grade(conn)` builds the entire two-grid payload in one pass: `por_projeto` is a

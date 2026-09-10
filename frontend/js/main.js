@@ -681,10 +681,13 @@ document.body.append(fileInput);
 fileInput.addEventListener("change", async () => {
   if (!fileInput.files.length) return;
   const arq = $("#arq-log");
+  const modo = fileInput.dataset.modo || "projeto";
   try {
     log("enviando…");
     if (arq) arq.textContent = "enviando…";
-    const res = await api.importarUpload(fileInput.files);
+    const res = modo === "bi"
+      ? await api.importarBI(fileInput.files)
+      : await api.importarProjeto(fileInput.files);
     S.estado = res.estado;
     const resumo = res.resultados.map(fmtResultado).join("\n");
     log(res.resultados.map(fmtResultado).join("  ·  "));
@@ -696,7 +699,8 @@ fileInput.addEventListener("change", async () => {
   fileInput.value = "";
 });
 
-function doImport() {
+function doImport(modo) {
+  fileInput.dataset.modo = modo || "projeto";
   fileInput.click();
 }
 
@@ -1765,7 +1769,8 @@ let EXCEL = null;
 function openArquivos() {
   const dlg = $("#dlg-arquivos");
   $("#arq-log").textContent = "";
-  $("#arq-import").onclick = doImport;
+  $("#arq-import-bi").onclick = () => doImport("bi");
+  $("#arq-import-proj").onclick = () => doImport("projeto");
   $("#arq-export").onclick = () => { dlg.close(); openExport(); };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
   dlg.showModal();

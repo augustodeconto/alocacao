@@ -7,9 +7,12 @@ Arquivos (detectados pelo cabeçalho):
                          pessoa/mês/tipo, todos os meses) e `pessoa.valor_hora`
   - projetomescusto   -> `bi_projeto`
 
-BI é autoridade do HEAD: o rebuild move o cache e registra um commit `origem='bi'`.
-O WORKING (o que o usuário edita) NÃO é tocado; projeto sem alocação ganha cópia.
-Para descartar edições e voltar ao HEAD: `POST /api/descartar-tudo`.
+Recarga do BI = SEMPRE a mesma coisa: monta o estado completo do BI e grava
+**um commit na `main`** (`origem='bi'`), pegando os valores do BI como estão
+(sem 3-way). Não encosta no working/rascunho de ninguém — `importar_arquivos`
+tira uma foto do working antes e a reaplica por cima do estado do BI depois, de
+modo que suas edições pendentes seguem visíveis (agora ancoradas no BI novo).
+Para largar as edições e pegar o BI: `POST /api/descartar-tudo`.
 
 Uso CLI:  python -m app.bi_import <arquivo.xlsx> [<arquivo.xlsx> ...]
 """
@@ -214,12 +217,11 @@ def _sync_base_campos(conn: sqlite3.Connection) -> None:
 
 
 def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
-    """Reconstrói o HEAD (alocação + janela + campos) a partir do `bi_custo` e
-    registra um commit `origem='bi'`. O working não é tocado (exceto projeto sem
-    alocação, que ganha cópia); as edições pendentes passam a diferir do novo HEAD."""
+    """Monta o estado completo do BI no cache (alocação + janela + campos) a partir
+    do `bi_custo` e registra **um commit na `main`** (`origem='bi'`). Não toca no
+    working de ninguém — `importar_arquivos` restaura o working depois."""
     from . import versao as _v
 
-    cache_antes = _v.snapshot_cache(conn)
     ext_to_pid = {
         str(r["id_projeto_externo"]): r["projeto_id"]
         for r in conn.execute(
@@ -287,31 +289,10 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
         )
 
     _sync_base_campos(conn)
-
-    # projeto sem alocação no working -> copia da baseline
-    novos_working = 0
-    for pid in pids:
-        if conn.execute("SELECT 1 FROM alocacao WHERE projeto_id=? LIMIT 1", (pid,)).fetchone():
-            continue
-        for b in conn.execute(
-            "SELECT matricula, tipo_alocacao FROM baseline_alocacao WHERE projeto_id=?", (pid,)
-        ).fetchall():
-            cur = conn.execute(
-                "INSERT INTO alocacao (projeto_id, matricula, tipo_alocacao) VALUES (?,?,?)",
-                (pid, b["matricula"], b["tipo_alocacao"]),
-            )
-            conn.execute(
-                """INSERT INTO alocacao_mes (alocacao_id, periodo, horas)
-                   SELECT ?, periodo, horas FROM baseline_alocacao_mes
-                   WHERE projeto_id=? AND matricula=? AND tipo_alocacao=?""",
-                (cur.lastrowid, pid, b["matricula"], b["tipo_alocacao"]),
-            )
-        novos_working += 1
     conn.commit()
 
-    cid = _v.commit_transicao_cache(conn, "Importação BI", "bi", cache_antes)
-    return {"projetos_baseline": len(pids), "projetos_preenchidos": novos_working,
-            "commit_bi": cid}
+    cid = _v.commitar_estado_bi(conn, f"Importação BI {_dt.date.today():%Y-%m-%d}")
+    return {"projetos_baseline": len(pids), "commit_bi": cid}
 
 
 def load_projetos(conn: sqlite3.Connection, sheet) -> dict:
@@ -396,7 +377,12 @@ def load_projetomescusto(conn: sqlite3.Connection, sheet) -> dict:
 
 
 def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
-    """Ordena para carregar `equipe` antes de `colabmescusto` (precisa do nome→matrícula)."""
+    """Ordena para carregar `equipe` antes de `colabmescusto` (precisa do nome→matrícula).
+    Envelopa tudo: fotografa o working e as edições pendentes antes, deixa os loaders
+    montarem o estado do BI e commitarem na `main`, e reaplica as edições do usuário
+    por cima do estado do BI no final."""
+    from . import versao as _v
+
     classificados = []
     for p in paths:
         try:
@@ -409,7 +395,21 @@ def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
     ordem = {"equipe": 0, "projetos": 1, "projetomescusto": 2, "colabmescusto": 3, None: 9}
     classificados.sort(key=lambda t: ordem[t[1]])
 
+    hrow = conn.execute("SELECT ref_nome FROM head_ WHERE id=1").fetchone()
+    head_ref = hrow["ref_nome"] if hrow else "main"
+    cache0 = _v.snapshot_cache(conn)
+    work0 = _v._estado_working(conn)
+    d0 = _v._delta(cache0, work0)
+    # só as edições de ALOCAÇÃO/JANELA do usuário são reancoradas. Campos de
+    # pessoa/projeto pertencem ao BI — se o extrato traz, o BI ganha.
+    user_d = {
+        "projeto": [], "pessoa": [],
+        "aloc_add": d0["aloc_add"], "aloc_del": d0["aloc_del"], "mes": d0["mes"],
+        "per_set": d0["per_set"], "per_del": d0["per_del"],
+    }
+
     out: list[dict] = []
+    houve_bi = False
     for p, kind, err in classificados:
         if err:
             out.append({"arquivo": Path(p).name, "status": "erro", "detail": err})
@@ -424,6 +424,19 @@ def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
         res["status"] = "ok"
         res["arquivo"] = Path(p).name
         out.append(res)
+        houve_bi = True
+
+    if houve_bi:
+        if head_ref == "main":
+            # HEAD está na main: cache == estado do BI (montado pelos loaders);
+            # reaplica as edições de alocação/janela do usuário por cima.
+            _v.escrever_working(conn, _v.aplicar_delta(_v._estado_cache(conn), user_d))
+        else:
+            # HEAD está numa branch de cenário: o BI commitou na `main`, mas o
+            # cache/working da branch do usuário NÃO podem ser tocados. Restaura.
+            _v._cache_set(conn, cache0, None)
+            _v.escrever_working(conn, work0)
+        conn.commit()
     return out
 
 
