@@ -828,7 +828,13 @@ function openNovoProjeto() {
       S.estado = res.estado;
       dlg.close();
       render();
-    } catch (err) { log(err.message, true); }
+      log(`projeto "${$("#np-nome").value.trim()}" criado`);
+    } catch (err) {
+      const extra = /já existe.*Id_projeto/i.test(err.message)
+        ? " — deixe o campo Id_projeto em branco se o projeto ainda não está no BI"
+        : "";
+      log(err.message + extra, true);
+    }
   };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
   dlg.showModal();

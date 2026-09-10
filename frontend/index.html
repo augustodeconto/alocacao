@@ -150,14 +150,17 @@
 <dialog id="dlg-novo">
   <h3>Novo projeto</h3>
   <div class="body">
-    <label>Id_projeto</label><input id="np-id" />
     <label>Nome</label><input id="np-nome" />
     <label>Empresa</label><input id="np-empresa" />
     <label>Status</label><input id="np-status" />
     <label>Matrícula GP</label><input id="np-gp" />
+    <label>Id_projeto (BI)</label><input id="np-id" placeholder="opcional — em branco se ainda não está no BI" />
     <label>ID Filial</label><input id="np-filial" type="number" value="62" />
-    <label>Mês início</label><input id="np-mes" type="number" min="1" max="12" value="1" />
-    <label>Ano início</label><input id="np-ano" type="number" value="2026" />
+  </div>
+  <p class="dlg-note">Janela inicial de meses da grade (dá para ajustar depois com o <b>＋</b> no fim da grade):</p>
+  <div class="body">
+    <label>1º mês</label><input id="np-mes" type="number" min="1" max="12" value="1" />
+    <label>1º ano</label><input id="np-ano" type="number" value="2026" />
     <label>Qtde. de meses</label><input id="np-meses" type="number" min="1" value="10" />
   </div>
   <div class="actions">

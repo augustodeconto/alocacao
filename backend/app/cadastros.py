@@ -32,6 +32,8 @@ def _db() -> sqlite3.Connection:
 
 # -- projeto -----------------------------------------------------------------
 # campos que a tela deixa editar (o resto é derivado / controle interno)
+# mes_inicio / ano_inicio NÃO entram aqui: são só o parâmetro interno da
+# planilha (mês/ano da 1ª coluna da aba Alocacao), não um atributo do projeto.
 _PROJETO_EDITAVEL = {
     "id_projeto_externo": str,
     "nome": str,
@@ -40,15 +42,13 @@ _PROJETO_EDITAVEL = {
     "id_status": int,
     "matricula_gp": str,
     "id_filial": int,
-    "mes_inicio": int,
-    "ano_inicio": int,
     "cenario1": int,
     "cenario2": int,
     "cenario3": int,
 }
 _PROJETO_COLS = (
     "projeto_id, id_projeto_externo, nome, empresa, status, id_status, matricula_gp, "
-    "id_filial, mes_inicio, ano_inicio, cenario1, cenario2, cenario3, arquivo_origem, "
+    "id_filial, cenario1, cenario2, cenario3, arquivo_origem, "
     "criado_na_ferramenta, exportado_em, alterado_em"
 )
 
