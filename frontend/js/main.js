@@ -27,8 +27,6 @@ const S = {
   extraTail: 0,   // meses extras à direita, adicionados na tela para lançar horas além de tudo
   view: localStorage.getItem("view") || "alloc",       // alloc | cad | ver
   theme: localStorage.getItem("theme") || "auto",      // auto | light | dark
-  sbCollapsed: localStorage.getItem("sbCollapsed") === "1",
-  sbW: parseFloat(localStorage.getItem("sbW")) || 232,
   secW: parseFloat(localStorage.getItem("secW")) || 300,
   cadTab: "projetos",
   secProjId: null,   // projeto do painel de custo (projeto_id interno)
@@ -483,9 +481,6 @@ function _render() {
   $("#proj-status").textContent =
     `${visiveis}/${pp.length} projeto(s)` + (sujos ? ` · ${sujos} não exportado(s)` : "");
   $("#btn-showall").textContent = S.showAll ? "todos" : "só ativos";
-  const sbS = $("#sb-status");
-  if (sbS) sbS.textContent = `${pp.length} projetos · ${(S.estado.pessoas || []).length} recursos`
-    + (sujos ? ` · ${sujos} p/ exportar` : "");
   if (S.view === "ver") renderVer();
   if (!S.scrollInit && PERIODOS.length) {
     S.scrollInit = true;
@@ -975,11 +970,6 @@ function setView(view, opts = {}) {
   for (const v of VIEWS) $("#view-" + v).hidden = v !== view;
   for (const b of document.querySelectorAll(".rail-btn[data-view]"))
     b.classList.toggle("on", b.dataset.view === view);
-  for (const b of document.querySelectorAll(".sb-item[data-view]")) {
-    const match = b.dataset.view === view &&
-      (view !== "cad" || !b.dataset.tab || b.dataset.tab === S.cadTab);
-    b.classList.toggle("active", match);
-  }
   renderSecondary();
   if (view === "cad") cadLoad(opts.tab || S.cadTab);
   if (view === "ver") renderVer();
@@ -1000,50 +990,30 @@ function cycleTheme() {
   applyTheme();
 }
 
-// -- larguras / recolher das barras laterais ----------------------
+// -- largura da barra da direita --------------------------------------
 function applyLayout() {
-  const app = $("#app");
-  app.classList.toggle("sb-collapsed", S.sbCollapsed);
-  app.style.setProperty("--sb-w", S.sbCollapsed ? "0px" : (S.sbW || 232) + "px");
-  app.style.setProperty("--sec-w", (S.secW || 300) + "px");
-  const c = $("#sb-collapse");
-  if (c) c.textContent = S.sbCollapsed ? "›" : "‹";
-  const r = $("#rail-sb");
-  if (r) r.classList.toggle("on", !S.sbCollapsed);
-}
-const applySidebar = applyLayout;   // compat
-
-function toggleSidebar() {
-  S.sbCollapsed = !S.sbCollapsed;
-  localStorage.setItem("sbCollapsed", S.sbCollapsed ? "1" : "0");
-  applyLayout();
+  $("#app").style.setProperty("--sec-w", (S.secW || 300) + "px");
 }
 
-function startWResize(e, which) {
+function startWResize(e) {   // só a barra secundária (direita)
   e.preventDefault();
   const app = $("#app");
-  const key = which === "sb" ? "--sb-w" : "--sec-w";
   const startX = e.clientX;
-  const startW = parseFloat(getComputedStyle(app).getPropertyValue(key)) ||
-    (which === "sb" ? 232 : 300);
-  const [min, max] = which === "sb" ? [150, 520] : [220, 640];
-  const handle = which === "sb" ? $("#sb-resize") : $("#sec-resize");
+  const startW = parseFloat(getComputedStyle(app).getPropertyValue("--sec-w")) || 300;
+  const handle = $("#sec-resize");
   handle.classList.add("dragging");
   document.body.style.cursor = "col-resize";
-  if (which === "sb" && S.sbCollapsed) toggleSidebar();
   const onMove = (ev) => {
-    const dx = ev.clientX - startX;
-    const w = Math.max(min, Math.min(max, which === "sb" ? startW + dx : startW - dx));
-    app.style.setProperty(key, w + "px");
+    const w = Math.max(220, Math.min(640, startW - (ev.clientX - startX)));
+    app.style.setProperty("--sec-w", w + "px");
   };
   const onUp = () => {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     handle.classList.remove("dragging");
     document.body.style.cursor = "";
-    const w = Math.round(parseFloat(getComputedStyle(app).getPropertyValue(key)));
-    if (which === "sb") { S.sbW = w; localStorage.setItem("sbW", w); }
-    else { S.secW = w; localStorage.setItem("secW", w); }
+    S.secW = Math.round(parseFloat(getComputedStyle(app).getPropertyValue("--sec-w")));
+    localStorage.setItem("secW", S.secW);
   };
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -1268,8 +1238,6 @@ async function cadLoad(tab) {
   CAD.tab = S.cadTab = tab;
   for (const b of document.querySelectorAll("#cad-toolbar .cad-tabs button"))
     b.classList.toggle("on", b.dataset.tab === tab);
-  for (const b of document.querySelectorAll('.sb-item[data-view="cad"]'))
-    b.classList.toggle("active", b.dataset.tab === tab);
   $("#cad-novo").hidden = tab !== "projetos";
   const tabela = $("#cad-tabela"), cat = $("#cad-catalogo"), busca = $("#cad-busca");
   log("carregando…");
@@ -1824,14 +1792,9 @@ function wire() {
   // ---- rail / sidebar / tema ----
   for (const b of document.querySelectorAll(".rail-btn[data-view]"))
     b.onclick = () => setView(b.dataset.view);
-  for (const b of document.querySelectorAll(".sb-item[data-view]"))
-    b.onclick = () => setView(b.dataset.view, { tab: b.dataset.tab });
   $("#rail-files").onclick = openArquivos;
   $("#rail-theme").onclick = cycleTheme;
-  $("#sb-collapse").onclick = toggleSidebar;
-  $("#rail-sb").onclick = toggleSidebar;
-  $("#sb-resize").addEventListener("mousedown", (e) => startWResize(e, "sb"));
-  $("#sec-resize").addEventListener("mousedown", (e) => startWResize(e, "sec"));
+  $("#sec-resize").addEventListener("mousedown", startWResize);
 
   // ---- toolbar da Alocação ----
   $("#btn-unidade").onclick = toggleUnidade;
@@ -1901,7 +1864,7 @@ async function boot() {
   window.addEventListener("unhandledrejection", (e) => log("JS: " + (e.reason && e.reason.message || e.reason), true));
   restoreLayout();
   applyTheme();
-  applySidebar();
+  applyLayout();
   wire();
   setView(S.view);
   refreshNavBtns();
