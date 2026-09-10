@@ -365,13 +365,17 @@ function render() {
 
 // -- filtro de GP: a CHAVE é a matrícula do GP; o nome é só rótulo ----
 const GP_SEM = "__sem_gp__";                 // valor da opção "— sem GP —"
-function gpDe(proj) { return (proj && proj.matricula_gp) || ""; }   // matrícula, ou "" se não tem
+// matrícula do GP como string (a chave); "" quando o projeto não tem GP
+function gpDe(proj) {
+  const m = proj && proj.matricula_gp;
+  return m == null || m === "" ? "" : String(m).trim();
+}
 
 function gpNome(mat) {
   if (!mat) return "(sem GP)";
-  const pe = (S.estado.pessoas || []).find((p) => p.matricula === mat);
+  const pe = (S.estado.pessoas || []).find((p) => String(p.matricula) === mat);
   if (pe && pe.nome) return pe.nome;
-  const pr = (S.estado.projetos || []).find((p) => p.matricula_gp === mat && p.gestor_projetos);
+  const pr = (S.estado.projetos || []).find((p) => gpDe(p) === mat && p.gestor_projetos);
   return (pr && pr.gestor_projetos) || mat;   // sem nome conhecido: mostra a própria matrícula
 }
 
