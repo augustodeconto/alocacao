@@ -1847,17 +1847,42 @@ function wire() {
   });
 }
 
+// -- marca de ambiente (prod vs dev) --------------------------------
+const ENV_INFO = {
+  prod: { cor: "#c0392b", nome: "PRODUÇÃO" },
+  dev:  { cor: "#d98a1f", nome: "DESENVOLVIMENTO" },
+  test: { cor: "#d98a1f", nome: "TESTE" },
+};
+function applyAmbiente(amb) {
+  const env = ((amb && amb.env) || "").toLowerCase();
+  const m = ENV_INFO[env] || { cor: "#5b7a9e", nome: env ? env.toUpperCase() : "AMBIENTE?" };
+  document.documentElement.style.setProperty("--env-cor", m.cor);
+  document.body.dataset.env = env || "?";
+  let frame = document.getElementById("env-frame");
+  if (!frame) {
+    frame = el("div", { id: "env-frame" }, el("span", { className: "env-badge" }));
+    document.body.append(frame);
+  }
+  frame.querySelector(".env-badge").textContent =
+    m.nome + (amb && amb.db ? "  ·  " + amb.db : "");
+  document.title = (env === "prod" || !env ? "" : `[${m.nome.slice(0, 3)}] `)
+    + "Planejamento de Alocação";
+}
+
 async function boot() {
   window.addEventListener("error", (e) => log("JS: " + e.message, true));
   window.addEventListener("unhandledrejection", (e) => log("JS: " + (e.reason && e.reason.message || e.reason), true));
   restoreLayout();
   applyTheme();
   applyLayout();
+  // palpite imediato pela porta (run.sh: 8731=prod, 8732=dev), antes do fetch
+  applyAmbiente({ env: { "8732": "dev", "8731": "prod" }[location.port] || "" });
   wire();
   setView(S.view);
   refreshNavBtns();
   try {
     S.estado = await api.estado();
+    applyAmbiente(S.estado.ambiente);
     render();
     if (S.view === "cad") cadLoad(S.cadTab);
     if (S.view === "ver") renderVer();

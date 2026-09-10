@@ -94,6 +94,25 @@ def _projetos() -> list[dict]:
     ]
 
 
+_DB_PATH = Path(str(dbmod.DEFAULT_DB_PATH))
+
+
+def _ambiente() -> dict:
+    """prod vs dev: `ALOCACAO_ENV` explícito, senão inferido do nome do banco
+    (alocacao-dev.db -> dev; alocacao.db -> prod)."""
+    env = (os.environ.get("ALOCACAO_ENV") or "").strip().lower()
+    if not env:
+        stem = _DB_PATH.stem.lower()
+        env = ("dev" if ("dev" in stem or "test" in stem)
+               else "prod" if stem == "alocacao" else (stem or "?"))
+    return {"env": env, "db": _DB_PATH.name, "db_path": str(_DB_PATH)}
+
+
+@app.get("/api/ambiente")
+def get_ambiente():
+    return _ambiente()
+
+
 def _estado() -> dict:
     return {
         "projetos": _projetos(),
@@ -101,6 +120,7 @@ def _estado() -> dict:
         "catalogos": _catalogos(),
         "pessoas": _pessoas(),
         "versao": versao.estado_repo(_conn),
+        "ambiente": _ambiente(),
     }
 
 

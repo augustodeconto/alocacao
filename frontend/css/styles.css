@@ -576,3 +576,17 @@ dialog .body.arq button.primary { background: var(--accent); color: #fff; border
   border-top: 1px solid var(--line); min-height: 20px;
 }
 #log .err { color: var(--err); }
+
+/* ================= marca de ambiente (prod vs dev) ================= */
+#env-frame {
+  position: fixed; inset: 0; z-index: 9998; pointer-events: none;
+  border: 3px solid var(--env-cor, transparent);
+}
+.env-badge {
+  position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+  z-index: 9999; pointer-events: none;
+  background: var(--env-cor, #888); color: #fff;
+  font: 600 10px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: .14em; text-transform: uppercase;
+  padding: 3px 12px 4px; border-radius: 0 0 8px 8px;
+}
