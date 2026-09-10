@@ -2,10 +2,16 @@
 .xlsx is import/export only (see the spec)."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "alocacao.db"
+# perfil: `ALOCACAO_DB` (setado pelo run.sh) escolhe prod vs dev; senão, o de sempre.
+_ENV_DB = os.environ.get("ALOCACAO_DB")
+DEFAULT_DB_PATH = (
+    Path(_ENV_DB).expanduser() if _ENV_DB
+    else Path(__file__).resolve().parent.parent / "alocacao.db"
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projeto (

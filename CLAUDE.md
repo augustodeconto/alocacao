@@ -18,12 +18,17 @@ branches + merge.
 ## Commands
 
 ```bash
-./run.sh                    # bootstraps .venv if missing, runs uvicorn on 0.0.0.0:8731
-HOST=127.0.0.1 ./run.sh     # bind to localhost only
-PORT=9000 ./run.sh          # override port
+./run.sh                    # profile "prod": backend/alocacao.db,     port 8731
+./run.sh dev                # profile "dev":  backend/alocacao-dev.db,  port 8732 (scratch)
+./run.sh dev --seed         # copy prod db -> dev db, then start
+HOST=127.0.0.1 PORT=9000 ALOCACAO_DB=/path/x.db ./run.sh   # overrides
 ```
-`run.sh` uses `.venv/bin/python -m uvicorn` (not the console script) so it survives the
-project folder being renamed. `--reload` watches both `backend/` and `frontend/`.
+Same app, two profiles = two DBs + two dir sets (`uploads/`+`exports/` vs `uploads-dev/`+
+`exports-dev/`); both can run at once. `run.sh` uses `.venv/bin/python -m uvicorn` (survives
+a project-folder rename). `--reload` watches `backend/` + `frontend/` for both instances.
+The DB path comes from `$ALOCACAO_DB` (`db.DEFAULT_DB_PATH`), dirs from
+`$ALOCACAO_UPLOADS` / `$ALOCACAO_EXPORTS` (`main.py`); unset → the `backend/alocacao.db`
+default. Tests always pass an explicit tmp DB, so the env vars don't affect them.
 
 ```bash
 cd backend && python -m pytest -q                       # full suite (needs .venv active, or use ../.venv/bin/python)
@@ -33,8 +38,9 @@ cd backend && python -m pytest tests/test_export.py::test_export_roundtrip_prese
 Tests read fixtures from `amostras/` (`conftest.py` points at `amostras/ed425bf6-20260518_Otimizeplan.xlsx`).
 No linter or formatter is configured.
 
-The DB lives at `backend/alocacao.db` (gitignored). Delete it to reset — it is recreated on
-startup from `SCHEMA` + `_migrate()`. Deps: `backend/requirements.txt`.
+The DB (per profile, all `*.db` gitignored). Delete it to reset — recreated on startup from
+`SCHEMA` + `_migrate()`. **For manual/DB smoke tests, work on a copy in the scratchpad or on
+the `dev` profile — never mutate `backend/alocacao.db` directly.** Deps: `backend/requirements.txt`.
 
 ## Architecture
 

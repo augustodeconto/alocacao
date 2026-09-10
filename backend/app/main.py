@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json as _json
+import os
 import threading
 from pathlib import Path
 
@@ -24,10 +25,11 @@ ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT / "frontend"
 SAMPLE_PATH = ROOT / "amostras" / "ed425bf6-20260518_Otimizeplan.xlsx"
 TEMPLATE_PATH = ROOT / "templates" / "projeto_template.xlsx"
-UPLOAD_DIR = ROOT / "uploads"
-EXPORT_DIR = ROOT / "exports"
-UPLOAD_DIR.mkdir(exist_ok=True)
-EXPORT_DIR.mkdir(exist_ok=True)
+# dirs por perfil (o run.sh seta ALOCACAO_UPLOADS/EXPORTS no perfil dev)
+UPLOAD_DIR = Path(os.environ.get("ALOCACAO_UPLOADS") or (ROOT / "uploads")).expanduser()
+EXPORT_DIR = Path(os.environ.get("ALOCACAO_EXPORTS") or (ROOT / "exports")).expanduser()
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 

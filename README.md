@@ -10,19 +10,20 @@ Especificação viva: [`docs/ESPECIFICACAO.md`](docs/ESPECIFICACAO.md).
 ## Rodar
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r backend/requirements.txt
-
-# sobe API + frontend em http://localhost:8731
-uvicorn --app-dir backend app.main:app --port 8731 --reload
+./run.sh            # perfil "prod": backend/alocacao.db,     porta 8731
+./run.sh dev        # perfil "dev":  backend/alocacao-dev.db, porta 8732  (p/ brincar/testar)
+./run.sh dev --seed # copia prod -> dev antes de subir (dados realistas p/ mexer à vontade)
 ```
 
-Abrir <http://localhost:8731> no navegador.
+Os dois perfis são a **mesma aplicação**, bancos e diretórios (`uploads/`, `exports/` vs
+`uploads-dev/`, `exports-dev/`) separados — dá para rodar os dois ao mesmo tempo, em abas
+diferentes do navegador. `--reload` recarrega o código nas duas instâncias.
 
-O banco fica em `backend/alocacao.db` (apague para começar do zero).
-O template de projeto novo é derivado de `amostras/ed425bf6-20260518_Otimizeplan.xlsx`
-na primeira exportação e salvo em `templates/projeto_template.xlsx`.
+Abrir <http://localhost:8731> (prod) ou <http://localhost:8732> (dev).
+
+Overrides: `HOST=127.0.0.1`, `PORT=9000`, `ALOCACAO_DB=/caminho/x.db` antes do `./run.sh`.
+Apague o `.db` do perfil para começar do zero. O template de projeto novo é derivado de
+`amostras/ed425bf6-20260518_Otimizeplan.xlsx` na 1ª exportação (`templates/projeto_template.xlsx`).
 
 ## Uso
 

@@ -1,18 +1,37 @@
 #!/usr/bin/env bash
-# Sobe API + frontend. Padrão: acessível na rede local (0.0.0.0:8731).
-#   ./run.sh              -> escuta em todas as interfaces (rede local)
-#   HOST=127.0.0.1 ./run.sh  -> só nesta máquina
+# Sobe a API + frontend. Dois perfis = dois bancos, portas diferentes, mesma app.
+#   ./run.sh              -> perfil "prod"  (backend/alocacao.db,     porta 8731)
+#   ./run.sh dev          -> perfil "dev"   (backend/alocacao-dev.db, porta 8732)  p/ brincar
+#   ./run.sh dev --seed   -> copia prod -> dev antes de subir (dados realistas p/ mexer)
+# Rodar os dois ao mesmo tempo: `./run.sh` num terminal e `./run.sh dev` noutro.
+# Overrides: HOST=127.0.0.1  PORT=9000  ALOCACAO_DB=/caminho/x.db  ./run.sh
 set -e
 cd "$(dirname "$0")"
 
+PERFIL="${1:-prod}"
+case "$PERFIL" in
+  prod)      DB_DEF="$PWD/backend/alocacao.db";     PORT_DEF=8731; SFX="" ;;
+  dev|test)  DB_DEF="$PWD/backend/alocacao-dev.db"; PORT_DEF=8732; SFX="-dev" ;;
+  *) echo "perfil desconhecido: '$PERFIL' (use 'prod' ou 'dev')"; exit 1 ;;
+esac
+
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8731}"
+PORT="${PORT:-$PORT_DEF}"
+export ALOCACAO_DB="${ALOCACAO_DB:-$DB_DEF}"
+export ALOCACAO_UPLOADS="${ALOCACAO_UPLOADS:-$PWD/uploads$SFX}"
+export ALOCACAO_EXPORTS="${ALOCACAO_EXPORTS:-$PWD/exports$SFX}"
+
+if [ "$2" = "--seed" ]; then
+  [ -f "$PWD/backend/alocacao.db" ] || { echo "sem backend/alocacao.db para semear"; exit 1; }
+  cp -v "$PWD/backend/alocacao.db" "$ALOCACAO_DB"
+fi
 
 if [ ! -d .venv ]; then
   python3 -m venv .venv
   .venv/bin/pip install -q -r backend/requirements.txt
 fi
 
+echo "perfil $PERFIL  ·  banco $ALOCACAO_DB  ·  porta $PORT"
 if [ "$HOST" = "0.0.0.0" ]; then
   ip=$(hostname -I 2>/dev/null | awk '{print $1}')
   echo "Acesse desta máquina:  http://localhost:$PORT"

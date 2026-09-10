@@ -8,4 +8,6 @@ __pycache__/
 templates/projeto_template.xlsx
 *.xlsx.bak
 uploads/
+uploads-*/
 exports/
+exports-*/
