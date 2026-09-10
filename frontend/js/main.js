@@ -825,7 +825,9 @@ function openNovoProjeto() {
       S.estado = res.estado;
       dlg.close();
       render();
+      if (S.view === "cad") await cadLoad(S.cadTab);   // atualiza a tabela de cadastro
       log(`projeto "${$("#np-nome").value.trim()}" criado`);
+      for (const i of ["np-id", "np-nome", "np-empresa", "np-status", "np-gp"]) $("#" + i).value = "";
     } catch (err) { log(err.message, true); }
   };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
