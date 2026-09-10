@@ -261,6 +261,9 @@ td.treecol.ind0 { padding-left: 6px; }
 td.treecol.ind1 { padding-left: 22px; }
 td.treecol.ind2 { padding-left: 40px; }
 tr.addrow td { color: var(--accent); font-style: italic; cursor: pointer; text-align: left; }
+tr.addrow td.treecol { background: var(--bg); }
+tr.addrow:hover td.treecol { background: var(--sel); }
+tr.addrow td.addfill { color: transparent; }
 
 td.month.alt { position: relative; }
 td.month.alt::after {

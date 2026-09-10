@@ -142,6 +142,15 @@ function treeCell(text, { level = 0, key, expandable, extra } = {}) {
   return td;
 }
 
+// linha "+ adicionar …": o rótulo fica só na coluna-árvore (fixa), o resto
+// da linha é uma célula vazia que rola normalmente.
+function addRow(label, indentClass, onclick) {
+  const tr = el("tr", { className: "addrow", onclick });
+  tr.append(el("td", { className: "treecol " + (indentClass || "ind0") }, label));
+  tr.append(el("td", { className: "month addfill", colSpan: Math.max(1, PERIODOS.length) }));
+  return tr;
+}
+
 function rowActions(f, projetoId, label, { comTipo = false } = {}) {
   const wrap = el("span", { className: "rowacts" });
   if (f.removido) {
@@ -310,15 +319,11 @@ function renderGridProjeto() {
         }
         tb.append(tr);
       }
-      const addg = el("tr", { className: "addrow" });
-      addg.append(el("td", { className: "treecol ind2", colSpan: PERIODOS.length + 1, textContent: "+ adicionar pessoa",
-        onclick: () => openAddAloc({ projeto_id: proj.projeto_id, tipo_alocacao: grp.tipo_alocacao }) }));
-      tb.append(addg);
+      tb.append(addRow("+ adicionar pessoa", "ind2",
+        () => openAddAloc({ projeto_id: proj.projeto_id, tipo_alocacao: grp.tipo_alocacao })));
     }
-    const add = el("tr", { className: "addrow" });
-    add.append(el("td", { className: "treecol ind1", colSpan: PERIODOS.length + 1, textContent: "+ adicionar tipo/equipe",
-      onclick: () => openAddAloc({ projeto_id: proj.projeto_id }) }));
-    tb.append(add);
+    tb.append(addRow("+ adicionar tipo/equipe", "ind1",
+      () => openAddAloc({ projeto_id: proj.projeto_id })));
   }
   gridProj.append(tb);
 }
@@ -367,10 +372,8 @@ function renderGridRecurso() {
       }
       tb.append(tr);
     }
-    const add = el("tr", { className: "addrow" });
-    add.append(el("td", { className: "treecol", colSpan: PERIODOS.length + 1, textContent: "+ adicionar alocação",
-      onclick: () => openAddAloc({ matricula: pes.matricula, nome: pes.nome }) }));
-    tb.append(add);
+    tb.append(addRow("+ adicionar alocação", "ind1",
+      () => openAddAloc({ matricula: pes.matricula, nome: pes.nome })));
   }
   gridRec.append(tb);
 }
