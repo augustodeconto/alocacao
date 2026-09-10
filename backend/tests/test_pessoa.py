@@ -68,5 +68,5 @@ def test_head_tem_pessoa_e_projeto(conn, sample_path):
     ).fetchone()["c"]
     assert n_pessoa == n_aloc_pessoas
     bp = conn.execute("SELECT * FROM base_projeto WHERE projeto_id=1").fetchone()
-    assert bp["nome"] == "OTIMIZEPLAN" and bp["mes_inicio"] == 5
+    assert bp["nome"] == "OTIMIZEPLAN"
     assert versao.pessoas_alteradas(conn, 1) == []

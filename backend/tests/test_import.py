@@ -8,7 +8,6 @@ def test_import_sample_basico(conn, sample_path):
     proj = conn.execute("SELECT * FROM projeto").fetchone()
     assert proj["nome"] == "OTIMIZEPLAN"
     assert proj["id_projeto_externo"] == "16045"
-    assert proj["mes_inicio"] == 5 and proj["ano_inicio"] == 2026
 
     periodos = [x["periodo"] for x in conn.execute(
         "SELECT periodo FROM projeto_periodo ORDER BY ordem")]

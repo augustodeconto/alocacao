@@ -176,8 +176,6 @@ def _read_dados_projeto(dp: Sheet) -> dict:
         "id_status": _to_int(g("idstatus")),
         "matricula_gp": _matricula(g("matricula_gp")),
         "id_filial": _to_int(g("id_filial")) or 62,
-        "mes_inicio": _to_int(g("mês inicio da alocação", "mes inicio da alocação", "mês início da alocação")),
-        "ano_inicio": _to_int(g("ano inicio da alocação", "ano início da alocação")),
         "cenario1": _to_int(g("cenario 1", "cenário 1")),
         "cenario2": _to_int(g("cenario 2", "cenário 2")),
         "cenario3": _to_int(g("cenario 3", "cenário 3")),
@@ -288,14 +286,11 @@ def _insert_projeto(cur, proj: dict, path: str, periodos: list[str]) -> int:
     cur.execute(
         """INSERT INTO projeto
            (id_projeto_externo, nome, empresa, status, id_status, matricula_gp,
-            id_filial, mes_inicio, ano_inicio, cenario1, cenario2, cenario3,
-            arquivo_origem, criado_na_ferramenta)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+            id_filial, cenario1, cenario2, cenario3, arquivo_origem, criado_na_ferramenta)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
         (
             proj["id_projeto_externo"], proj["nome"], proj["empresa"], proj["status"],
             proj["id_status"], proj["matricula_gp"], proj["id_filial"],
-            proj["mes_inicio"] or (int(periodos[0][5:7]) if periodos else 1),
-            proj["ano_inicio"] or (int(periodos[0][0:4]) if periodos else 2025),
             proj["cenario1"], proj["cenario2"], proj["cenario3"],
             path,
         ),
@@ -314,13 +309,11 @@ def _update_projeto(cur, projeto_id: int, proj: dict, path: str, periodos: list[
     cur.execute(
         """UPDATE projeto SET
              nome=?, empresa=?, status=?, id_status=?, matricula_gp=?, id_filial=?,
-             mes_inicio=?, ano_inicio=?, cenario1=?, cenario2=?, cenario3=?, arquivo_origem=?
+             cenario1=?, cenario2=?, cenario3=?, arquivo_origem=?
            WHERE projeto_id=?""",
         (
             proj["nome"], proj["empresa"], proj["status"], proj["id_status"],
             proj["matricula_gp"], proj["id_filial"],
-            proj["mes_inicio"] or (int(periodos[0][5:7]) if periodos else 1),
-            proj["ano_inicio"] or (int(periodos[0][0:4]) if periodos else 2025),
             proj["cenario1"], proj["cenario2"], proj["cenario3"], path, projeto_id,
         ),
     )

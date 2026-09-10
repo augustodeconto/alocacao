@@ -23,8 +23,6 @@ CREATE TABLE IF NOT EXISTS projeto (
     id_status           INTEGER,
     matricula_gp        TEXT,
     id_filial           INTEGER DEFAULT 62,
-    mes_inicio          INTEGER NOT NULL,
-    ano_inicio          INTEGER NOT NULL,
     cenario1            INTEGER,
     cenario2            INTEGER,
     cenario3            INTEGER,
@@ -147,7 +145,7 @@ CREATE TABLE IF NOT EXISTS chg_projeto (
     commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
     projeto_id INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     nome TEXT, empresa TEXT, status TEXT, id_status INTEGER, matricula_gp TEXT,
-    id_filial INTEGER, mes_inicio INTEGER, ano_inicio INTEGER,
+    id_filial INTEGER,
     cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER, gestor_projetos TEXT,
     PRIMARY KEY (commit_id, projeto_id)
 );
@@ -199,7 +197,7 @@ CREATE TABLE IF NOT EXISTS baseline_alocacao_mes (
 CREATE TABLE IF NOT EXISTS base_projeto (
     projeto_id INTEGER PRIMARY KEY,
     nome TEXT, empresa TEXT, status TEXT, id_status INTEGER, matricula_gp TEXT,
-    id_filial INTEGER, mes_inicio INTEGER, ano_inicio INTEGER,
+    id_filial INTEGER,
     cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER, gestor_projetos TEXT
 );
 CREATE TABLE IF NOT EXISTS base_pessoa (
@@ -281,6 +279,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have_pr = {r["name"] for r in conn.execute("PRAGMA table_info(projeto)")}
     if "gestor_projetos" not in have_pr:
         conn.execute("ALTER TABLE projeto ADD COLUMN gestor_projetos TEXT")
+
+    # mes_inicio / ano_inicio saíram: eram só o parâmetro da 1ª coluna da planilha,
+    # não um atributo do projeto. A janela de meses vive em projeto_periodo.
+    for tbl in ("projeto", "chg_projeto", "base_projeto"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({tbl})")}
+        for c in ("mes_inicio", "ano_inicio"):
+            if c in cols:
+                conn.execute(f"ALTER TABLE {tbl} DROP COLUMN {c}")
 
     have_bp = {r["name"] for r in conn.execute("PRAGMA table_info(bi_projeto)")}
     for col in ("empresa", "status", "gestor"):

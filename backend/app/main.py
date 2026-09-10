@@ -87,8 +87,7 @@ def _projetos() -> list[dict]:
         dict(r)
         for r in _conn.execute(
             """SELECT projeto_id, id_projeto_externo, nome, empresa, status, gestor_projetos,
-                      mes_inicio, ano_inicio, arquivo_origem, criado_na_ferramenta,
-                      exportado_em, alterado_em
+                      arquivo_origem, criado_na_ferramenta, exportado_em, alterado_em
                FROM projeto ORDER BY nome"""
         )
     ]
@@ -314,9 +313,6 @@ def criar_projeto(payload: dict = Body(...)):
         nome = (payload.get("nome") or "").strip()
         if not nome:
             raise HTTPException(422, "nome é obrigatório")
-        mes = int(payload.get("mes_inicio") or 1)
-        ano = int(payload.get("ano_inicio") or _dt.date.today().year)
-        n_meses = int(payload.get("meses") or 10)
         externo = payload.get("id_projeto_externo")
         if externo and _conn.execute(
             "SELECT 1 FROM projeto WHERE id_projeto_externo=?", (str(externo),)
@@ -327,26 +323,23 @@ def criar_projeto(payload: dict = Body(...)):
         cur.execute(
             """INSERT INTO projeto
                (id_projeto_externo, nome, empresa, status, id_status, matricula_gp,
-                id_filial, mes_inicio, ano_inicio, cenario1, cenario2, cenario3,
-                criado_na_ferramenta, alterado_em)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+                id_filial, cenario1, cenario2, cenario3, criado_na_ferramenta, alterado_em)
+               VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
             (
                 str(externo) if externo else None, nome, payload.get("empresa"),
                 payload.get("status"), payload.get("id_status"), payload.get("matricula_gp"),
-                int(payload.get("id_filial") or 62), mes, ano,
+                int(payload.get("id_filial") or 62),
                 payload.get("cenario1"), payload.get("cenario2"), payload.get("cenario3"),
                 _dt.datetime.now().isoformat(timespec="seconds"),
             ),
         )
         projeto_id = cur.lastrowid
-        base = _dt.date(ano, mes, 1)
+        # janela de meses padrão: mês atual + 10 (ajustável na grade com o ＋)
+        d = _dt.date.today().replace(day=1)
         periodos = []
-        y, m = ano, mes
-        for i in range(n_meses):
-            periodos.append((projeto_id, _dt.date(y, m, 1).isoformat(), i))
-            m += 1
-            if m > 12:
-                m, y = 1, y + 1
+        for i in range(int(payload.get("meses") or 10)):
+            periodos.append((projeto_id, d.isoformat(), i))
+            d = (d.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
         cur.executemany(
             "INSERT INTO projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)", periodos
         )

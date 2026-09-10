@@ -821,20 +821,12 @@ function openNovoProjeto() {
         status: $("#np-status").value.trim(),
         matricula_gp: $("#np-gp").value.trim(),
         id_filial: Number($("#np-filial").value) || 62,
-        mes_inicio: Number($("#np-mes").value),
-        ano_inicio: Number($("#np-ano").value),
-        meses: Number($("#np-meses").value),
       });
       S.estado = res.estado;
       dlg.close();
       render();
       log(`projeto "${$("#np-nome").value.trim()}" criado`);
-    } catch (err) {
-      const extra = /já existe.*Id_projeto/i.test(err.message)
-        ? " — deixe o campo Id_projeto em branco se o projeto ainda não está no BI"
-        : "";
-      log(err.message + extra, true);
-    }
+    } catch (err) { log(err.message, true); }
   };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
   dlg.showModal();
@@ -1091,7 +1083,6 @@ const CAD_LABELS = {
   projeto_id: "ID interno", id_projeto_externo: "Id_projeto", nome: "Nome",
   empresa: "Empresa", status: "Status", id_status: "idStatus",
   matricula_gp: "Matrícula GP", id_filial: "Filial", gestor_projetos: "Gestor",
-  mes_inicio: "Mês início", ano_inicio: "Ano início",
   cenario1: "Cenário 1", cenario2: "Cenário 2", cenario3: "Cenário 3",
   arquivo_origem: "Arquivo origem", criado_na_ferramenta: "Criado aqui",
   exportado_em: "Exportado em", alterado_em: "Alterado em",
@@ -1099,7 +1090,7 @@ const CAD_LABELS = {
   capacidade_mensal: "Capacidade mensal", ativo: "Ativo", area: "Área",
   tipo_contrato: "Tipo contrato", situacao: "Situação", fim_contrato: "Fim contrato",
 };
-const CAD_NUM = new Set(["id_status", "id_filial", "mes_inicio", "ano_inicio",
+const CAD_NUM = new Set(["id_status", "id_filial",
   "cenario1", "cenario2", "cenario3", "carga_diaria", "capacidade_mensal"]);
 let CAD = { tab: "projetos", cols: [], editaveis: [], rows: [] };
 

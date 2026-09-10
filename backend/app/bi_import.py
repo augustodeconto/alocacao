@@ -234,7 +234,7 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
         if str(idp) in ext_to_pid:
             continue
         conn.execute(
-            "INSERT OR IGNORE INTO projeto (id_projeto_externo, nome, mes_inicio, ano_inicio) VALUES (?,?,1,2025)",
+            "INSERT OR IGNORE INTO projeto (id_projeto_externo, nome) VALUES (?,?)",
             (str(idp), nome_bi.get(idp) or f"#{idp}"),
         )
         ext_to_pid[str(idp)] = conn.execute(
@@ -269,10 +269,6 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
         conn.executemany(
             "INSERT INTO base_projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)",
             [(pid, p, i) for i, p in enumerate(full)],
-        )
-        conn.execute(
-            "UPDATE projeto SET mes_inicio=?, ano_inicio=? WHERE projeto_id=?",
-            (int(ms[0][5:7]), int(ms[0][:4]), pid),
         )
 
     for (pid, mat, tipo), mm in grupos.items():
@@ -329,9 +325,8 @@ def load_projetos(conn: sqlite3.Connection, sheet) -> dict:
         )
         # tabela de trabalho: o projeto do BI vira `projeto` (editável no grid)
         conn.execute(
-            """INSERT INTO projeto (id_projeto_externo, nome, empresa, status, gestor_projetos,
-                                    mes_inicio, ano_inicio)
-               VALUES (?,?,?,?,?, 1, 2025)
+            """INSERT INTO projeto (id_projeto_externo, nome, empresa, status, gestor_projetos)
+               VALUES (?,?,?,?,?)
                ON CONFLICT(id_projeto_externo) DO UPDATE SET
                  nome=excluded.nome, empresa=excluded.empresa, status=excluded.status,
                  gestor_projetos=excluded.gestor_projetos""",

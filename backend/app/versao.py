@@ -22,7 +22,7 @@ import sqlite3
 
 PROJETO_COLS = [
     "nome", "empresa", "status", "id_status", "matricula_gp", "id_filial",
-    "mes_inicio", "ano_inicio", "cenario1", "cenario2", "cenario3", "gestor_projetos",
+    "cenario1", "cenario2", "cenario3", "gestor_projetos",
 ]
 PESSOA_COLS = [
     "nome", "situacao", "equipe", "area", "tipo_contrato", "inicio_contrato",
