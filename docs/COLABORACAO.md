@@ -33,8 +33,9 @@ Dois usuários hoje = mesmo rascunho, mesma branch, "last write wins", sem atrib
 
 ```sql
 CREATE TABLE usuario (
-  nome       TEXT PRIMARY KEY,        -- escolhido de uma lista; evita "augusto"/"Augusto"
-  criado_em  TEXT
+  nome            TEXT PRIMARY KEY,   -- escolhido de uma lista; evita "augusto"/"Augusto"
+  sempre_revisar  INTEGER NOT NULL DEFAULT 0,  -- ver "4 níveis" abaixo
+  criado_em       TEXT
 );
 
 CREATE TABLE rascunho (
@@ -78,14 +79,27 @@ trás se outra pessoa commitar na mesma branch → merge no `salvar` (abaixo).
 - `merge base` = `rascunho.base_commit_id` (por construção é ancestral do topo atual).
 - OURS (sintético) = `materializar(base_commit_id)` + aplica `edicoes`.
 - THEIRS = `materializar(topo atual de ref_nome)`.
-- 3-way (reusa `_merge3` de `versao.py`):
-  - topo == base (ninguém mexeu) → commit linear, `parent = base`.
-  - topo andou, sem sobreposição → commit linear, `parent = topo`, delta = diff(topo, OURS mesclado).
-  - sobreposição → conflitos (`merge_conflito`), usuário resolve, depois commita, `parent = topo`.
+- 3-way (reusa `_merge3` de `versao.py`).
 - **Sempre commit de 1 pai** — o rascunho nunca foi um commit, então não há 2º pai. (Isso é
   diferente do `merge(origem)` da Fase 2, que junta duas branches reais e gera commit de 2 pais.)
 - `commit_.autor = rascunho.autor`. A ref da branch avança. O rascunho é **consumido**
   (apagado); o autor fica num rascunho limpo sobre o commit novo.
+
+#### Quanto o "salvar" incomoda — 4 níveis
+
+Decididos por dados baratos: `tocado` = chaves que o meu rascunho editou; `entrou` =
+chaves que mudaram no topo desde `base_commit_id`.
+
+| Nível | Situação | Ao salvar |
+|---|---|---|
+| **1** | topo == base | commita, `parent = base`. Nada a dizer. |
+| **2** | topo andou, `tocado ∩ entrou = ∅` | merge silencioso, `parent = topo`. Toast passivo: *"incorporei os commits #58–#60 de Maria e Pedro"*. |
+| **3** | `tocado ∩ entrou ≠ ∅`, mas `_merge3` resolve (sem conflito real) | **bloqueia** com um *digest* do que veio do outro lado (*"Maria mudou a capacidade do João; 2 alocações novas em BRAVO 2"*) → **Salvar assim / Cancelar**. Não é revisão célula a célula. |
+| **4** | conflito real (mesma célula/campo, valores diferentes) | para; resolução célula a célula (`merge_conflito`, máquina da Fase 2); depois commita, `parent = topo`. |
+
+- **Preferência por usuário** (`usuario.sempre_revisar`, default `0`): quando ligada,
+  promove o nível 2 a também mostrar o digest com **Salvar assim / Cancelar**. Nível 1
+  nunca pede nada.
 
 ### Descartar
 `DELETE /api/rascunho/{id}` → recarrega do topo da branch.
@@ -130,10 +144,11 @@ Fase 2 junta branch↔branch.
 
 ## Em aberto
 
-1. **Salvar com a branch adiantada (merge automático):** transparente (só avisa se der
-   conflito) ou sempre mostra um "revise antes de salvar"? — *sem decisão.*
-   Recomendação: transparente. O caso comum (sem sobreposição) não deveria ter fricção;
-   isso combina com "comunicação é por commit".
+1. ~~Salvar com a branch adiantada: transparente ou sempre revisar?~~ **Decidido:** 4
+   níveis (ver "Quanto o salvar incomoda"). Transparente nos níveis 1–2; bloqueio com
+   *digest* (não revisão célula a célula) no nível 3 — commitou por cima de algo que mexeu
+   no seu território, então você olha antes; nível 4 (conflito real) sempre trava.
+   Preferência `usuario.sempre_revisar` promove o nível 2 ao digest.
 2. Rascunho pode ser renomeado / ter mais de um por (autor, branch)? — hoje: **não**, um só.
 3. `main` protegida contra `salvar` direto (forçar branch + merge)? — provável que **não**
    no v1, mas fácil de ligar depois (`ref_.protegida`).
