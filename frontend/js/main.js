@@ -248,39 +248,20 @@ function renderGridProjeto() {
     const janela = new Set(proj.periodos_projeto);
     const acoes = el("span");
     acoes.append(
-      proj.sujo ? el("span", { title: "alterações não exportadas", textContent: " ●" }) : "",
+      proj.sujo ? el("span", { title: "alterações não commitadas", textContent: " ●" }) : "",
       el("span", {
-        className: "tw-toggle", title: "exportar .xlsx", textContent: " ⭳",
-        onclick: (e) => { e.stopPropagation(); doExport(proj.projeto_id); },
-      }),
-      el("span", {
-        className: "tw-toggle", title: "descartar mudanças deste projeto (voltar à baseline)",
+        className: "tw-toggle", title: "reverter as mudanças pendentes deste projeto",
         textContent: " ↺",
         onclick: async (e) => {
           e.stopPropagation();
-          if (!confirm(`Descartar as mudanças de "${proj.nome}"?\nVolta ao estado da baseline (BI).`)) return;
+          if (!confirm(`Reverter as mudanças pendentes de "${proj.nome}"?\nVolta ao estado do último commit.`)) return;
           try { S.estado = (await api.descartarProjeto(proj.projeto_id)).estado; render(); }
           catch (err) { log(err.message, true); }
         },
       }),
-      el("span", {
-        className: "tw-toggle", title: "definir a baseline = estado atual (commit local)",
-        textContent: " ⌾",
-        onclick: async (e) => {
-          e.stopPropagation();
-          if (!confirm(`Definir a linha de base de "${proj.nome}" como o estado atual?`)) return;
-          try { S.estado = (await api.marcarBaseline(proj.projeto_id)).estado; render(); }
-          catch (err) { log(err.message, true); }
-        },
-      }),
-      el("span", {
-        className: "tw-toggle", title: "remover projeto do banco", textContent: "✕",
-        onclick: (e) => { e.stopPropagation(); doRemoveProjeto(proj.projeto_id, proj.nome); },
-      }),
     );
     let nomeProj = proj.nome;
     if (proj.encerrado) nomeProj += "  (encerrado)";
-    if (proj.gestor_projetos) nomeProj += `   ·   GP: ${proj.gestor_projetos}`;
     const tr0 = el("tr", {
       className: "lvl0" + (proj.encerrado ? " encerrado" : ""),
       dataset: { projetoId: proj.projeto_id },
@@ -341,14 +322,8 @@ function renderGridRecurso() {
     // Esconde só as linhas puramente históricas (ver filhoVisivel).
     const filhos = pes.filhos.filter(filhoVisivel);
     const key = `r:${pes.matricula}`;
-    const capLabel = el("span", {
-      className: "tw-toggle", style: "width:auto;color:var(--muted)",
-      title: "editar capacidade mensal",
-      textContent: `  [cap: ${pes.capacidade_mensal ?? "?"}]`,
-      onclick: (e) => { e.stopPropagation(); editCapacidade(pes); },
-    });
     const tr0 = el("tr", { className: "lvl0", dataset: { matricula: pes.matricula } });
-    tr0.append(treeCell(pes.nome, { level: 0, key, expandable: true, extra: capLabel }));
+    tr0.append(treeCell(pes.nome, { level: 0, key, expandable: true }));
     for (const p of PERIODOS) {
       tr0.append(monthCell("total", cellValueNodes(pes.totais[p] || 0, pes.capacidade_mensal),
         { colorClass: colorClassFor(pes.cores, p), ...totAltInfo(pes, p) }));
@@ -698,26 +673,6 @@ function openAddAloc(ctx) {
   dlg.showModal();
 }
 
-// -- capacity ------------------------------------------------------
-async function editCapacidade(pes) {
-  const v = prompt(`Capacidade mensal de ${pes.nome} (horas). Vazio = digitar carga diária.`,
-    pes.capacidade_mensal ?? "");
-  if (v === null) return;
-  try {
-    let payload;
-    if (v.trim() === "") {
-      const cd = prompt("Carga diária (8, 6, 4)…", pes.carga_diaria ?? "8");
-      if (cd === null) return;
-      payload = { carga_diaria: Number(cd) };
-    } else {
-      payload = { capacidade_mensal: Number(v) };
-    }
-    const res = await api.editarPessoa(pes.matricula, payload);
-    S.estado = res.estado;
-    render();
-  } catch (err) { log(err.message, true); }
-}
-
 // -- toolbar actions --------------------------------------------------
 const fileInput = Object.assign(document.createElement("input"), {
   type: "file", accept: ".xlsx", multiple: true, style: "display:none",
@@ -754,19 +709,6 @@ function fmtResultado(x) {
   if (x.projetos != null) extra.push(`${x.projetos} projetos`);
   if (x.sem_matricula) extra.push(`${x.sem_matricula} sem matrícula`);
   return `${nome}: ${x.status}${extra.length ? " (" + extra.join("; ") + ")" : ""}`;
-}
-
-async function doExport(projeto_id) {
-  const a = document.createElement("a");
-  a.href = api.downloadUrl(projeto_id);
-  a.download = "";
-  document.body.append(a);
-  a.click();
-  a.remove();
-  log("gerando .xlsx para download…");
-  setTimeout(async () => {
-    try { S.estado = await api.estado(); render(); } catch {}
-  }, 800);
 }
 
 const MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -862,15 +804,6 @@ function openExport() {
   };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
   dlg.showModal();
-}
-
-async function doRemoveProjeto(projeto_id, nome) {
-  if (!confirm(`Remover "${nome}" do banco? (o arquivo .xlsx não é apagado)`)) return;
-  try {
-    const res = await api.removerProjeto(projeto_id);
-    S.estado = res.estado;
-    render();
-  } catch (err) { log(err.message, true); }
 }
 
 function openNovoProjeto() {

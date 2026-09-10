@@ -5,10 +5,11 @@ Local single-user app; one shared SQLite connection guarded by a lock.
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
 import threading
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -728,6 +729,124 @@ def versao_abortar_merge():
         except ValueError as e:
             raise HTTPException(409, str(e))
         return {"estado": _estado()}
+
+
+# -- multiusuário: identidade + rascunhos (ver docs/COLABORACAO.md) -----
+def _lista_usuarios() -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT nome, sempre_revisar FROM usuario ORDER BY nome")]
+
+
+@app.get("/api/usuarios")
+def usuarios():
+    with _lock:
+        return {"usuarios": _lista_usuarios()}
+
+
+@app.post("/api/usuarios")
+def criar_usuario(payload: dict = Body(...)):
+    nome = str(payload.get("nome") or "").strip()
+    if not nome:
+        raise HTTPException(422, "nome é obrigatório")
+    with _lock:
+        _conn.execute(
+            "INSERT INTO usuario (nome, sempre_revisar, criado_em) VALUES (?,?,?) "
+            "ON CONFLICT(nome) DO UPDATE SET sempre_revisar=excluded.sempre_revisar",
+            (nome, int(bool(payload.get("sempre_revisar"))),
+             _dt.datetime.now().isoformat(timespec="seconds")),
+        )
+        _conn.commit()
+        return {"usuarios": _lista_usuarios()}
+
+
+def _rascunho_row(a: str, ref: str) -> dict | None:
+    r = _conn.execute(
+        "SELECT * FROM rascunho WHERE autor=? AND ref_nome=?", (a, ref)).fetchone()
+    if r is None:
+        return None
+    d = dict(r)
+    d["edicoes"] = _json.loads(d["edicoes"])
+    return d
+
+
+@app.get("/api/rascunho")
+def get_rascunho(autor: str | None = None, ref: str | None = None,
+                 x_autor: str | None = Header(default=None, alias="X-Autor")):
+    a = (autor or x_autor or "").strip()
+    with _lock:
+        q, args = "SELECT * FROM rascunho", []
+        cond = []
+        if a:
+            cond.append("autor=?"); args.append(a)
+        if ref:
+            cond.append("ref_nome=?"); args.append(ref)
+        if cond:
+            q += " WHERE " + " AND ".join(cond)
+        rows = []
+        for r in _conn.execute(q, args):
+            d = dict(r)
+            d["edicoes"] = _json.loads(d["edicoes"])
+            rows.append(d)
+        return {"rascunhos": rows}
+
+
+@app.put("/api/rascunho")
+def put_rascunho(payload: dict = Body(...),
+                 x_autor: str | None = Header(default=None, alias="X-Autor")):
+    a = (str(payload.get("autor") or "") or (x_autor or "")).strip()
+    ref = str(payload.get("ref") or payload.get("ref_nome") or "").strip()
+    if not a or not ref:
+        raise HTTPException(422, "autor e ref são obrigatórios")
+    edicoes = payload.get("edicoes") or {}
+    with _lock:
+        if not _conn.execute("SELECT 1 FROM ref_ WHERE nome=?", (ref,)).fetchone():
+            raise HTTPException(404, f"branch '{ref}' não existe")
+        base = payload.get("base_commit_id") or versao.tip_commit(_conn, ref)
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        _conn.execute(
+            "INSERT INTO rascunho (autor, ref_nome, base_commit_id, criado_em, atualizado_em, edicoes) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(autor, ref_nome) DO UPDATE SET "
+            "  edicoes=excluded.edicoes, atualizado_em=excluded.atualizado_em",
+            (a, ref, base, now, now, _json.dumps(edicoes)),
+        )
+        _conn.commit()
+        return {"rascunho": _rascunho_row(a, ref)}
+
+
+@app.delete("/api/rascunho/{rascunho_id}")
+def del_rascunho(rascunho_id: int):
+    with _lock:
+        _conn.execute("DELETE FROM rascunho WHERE rascunho_id=?", (rascunho_id,))
+        _conn.commit()
+        return {"ok": True}
+
+
+@app.post("/api/rascunho/commitar")
+def commitar_rascunho_ep(payload: dict = Body(...),
+                         x_autor: str | None = Header(default=None, alias="X-Autor")):
+    a = (str(payload.get("autor") or "") or (x_autor or "")).strip()
+    ref = str(payload.get("ref") or payload.get("ref_nome") or "").strip()
+    if not a or not ref:
+        raise HTTPException(422, "autor e ref são obrigatórios")
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM rascunho WHERE autor=? AND ref_nome=?", (a, ref)).fetchone()
+        if row is None:
+            raise HTTPException(404, "sem rascunho para essa branch")
+        try:
+            res = versao.commitar_rascunho(
+                _conn, a, ref, _json.loads(row["edicoes"]), row["base_commit_id"],
+                confirmar=bool(payload.get("confirmar")),
+                mensagem=str(payload.get("mensagem") or "").strip(),
+            )
+        except versao.NadaParaCommitar as e:
+            raise HTTPException(409, str(e))
+        except KeyError:
+            raise HTTPException(404, f"branch '{ref}' não existe")
+        if res.get("commit_id"):
+            res["estado"] = _estado()
+        return res
 
 
 @app.put("/api/alocacao/{alocacao_id}/mes")

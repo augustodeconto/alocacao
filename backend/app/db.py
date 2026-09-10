@@ -224,6 +224,23 @@ CREATE TABLE IF NOT EXISTS merge_conflito (
     resolvido   INTEGER NOT NULL DEFAULT 0,
     valor_final TEXT
 );
+-- multiusuário (ver docs/COLABORACAO.md): identidade + rascunho por autor/branch
+CREATE TABLE IF NOT EXISTS usuario (
+    nome            TEXT PRIMARY KEY,
+    sempre_revisar  INTEGER NOT NULL DEFAULT 0,   -- promove o nível 2 do "salvar" ao digest
+    criado_em       TEXT
+);
+CREATE TABLE IF NOT EXISTS rascunho (
+    rascunho_id    INTEGER PRIMARY KEY,
+    autor          TEXT NOT NULL,
+    ref_nome       TEXT NOT NULL,
+    base_commit_id INTEGER NOT NULL,   -- topo da branch quando o rascunho nasceu
+    nome           TEXT,
+    criado_em      TEXT NOT NULL,
+    atualizado_em  TEXT NOT NULL,
+    edicoes        TEXT NOT NULL,      -- JSON: {mes, aloc_add, aloc_del, pessoa, projeto, janela}
+    UNIQUE (autor, ref_nome)
+);
 
 CREATE INDEX IF NOT EXISTS ix_alocacao_projeto ON alocacao(projeto_id);
 CREATE INDEX IF NOT EXISTS ix_alocacao_matricula ON alocacao(matricula);

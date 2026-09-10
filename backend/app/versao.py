@@ -937,6 +937,174 @@ def abortar_merge(conn: sqlite3.Connection) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# rascunhos (multiusuário — ver docs/COLABORACAO.md)
+# --------------------------------------------------------------------------- #
+def tip_commit(conn: sqlite3.Connection, ref: str) -> int:
+    r = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (ref,)).fetchone()
+    if r is None:
+        raise KeyError(ref)
+    return r["commit_id"]
+
+
+def _split(s: str) -> list[str]:
+    return s.split("|")
+
+
+def _aplicar_edicoes(E: dict, ed: dict) -> dict:
+    """Estado materializado + edit-set do rascunho -> estado 'OURS' sintético."""
+    out = {k: dict(E[k]) for k in ("projeto", "pessoa", "alocacao", "mes", "periodo")}
+    for s, h in (ed.get("mes") or {}).items():
+        p = _split(s)
+        key = (int(p[0]), p[1], p[2], p[3])
+        if h in (None, 0, "0", ""):
+            out["mes"].pop(key, None)
+        else:
+            out["mes"][key] = int(round(float(h)))
+    for t in (ed.get("aloc_add") or []):
+        out["alocacao"][(int(t[0]), t[1], t[2])] = True
+    for t in (ed.get("aloc_del") or []):
+        k = (int(t[0]), t[1], t[2])
+        out["alocacao"].pop(k, None)
+        for mk in [mk for mk in out["mes"] if mk[:3] == k]:
+            out["mes"].pop(mk, None)
+    for mat, fields in (ed.get("pessoa") or {}).items():
+        base = dict(out["pessoa"].get(mat) or {c: None for c in PESSOA_COLS})
+        base.update({c: fields[c] for c in fields if c in PESSOA_COLS})
+        out["pessoa"][mat] = base
+    for pid, fields in (ed.get("projeto") or {}).items():
+        pid = int(pid)
+        base = dict(out["projeto"].get(pid) or {c: None for c in PROJETO_COLS})
+        base.update({c: fields[c] for c in fields if c in PROJETO_COLS})
+        out["projeto"][pid] = base
+    for s, o in (ed.get("janela") or {}).items():
+        p = _split(s)
+        key = (int(p[0]), p[1])
+        if o in (None, ""):
+            out["periodo"].pop(key, None)
+        else:
+            out["periodo"][key] = int(o)
+    out["mes"] = {
+        k: v for k, v in out["mes"].items()
+        if v and v > 0 and (k[0], k[1], k[2]) in out["alocacao"]
+    }
+    return out
+
+
+# "footprint" no nível de LINHA/entidade (não da célula): a alocação inteira,
+# a pessoa, o projeto. Nível 3 = os dois lados mexeram na mesma linha.
+def _footprint_delta(d: dict) -> set:
+    fp: set = set()
+    for (k, _) in d["mes"]:
+        fp.add(("aloc", k[0], k[1], k[2]))
+    for k in d["aloc_add"] + d["aloc_del"]:
+        fp.add(("aloc",) + k)
+    for (pid, _) in d["projeto"]:
+        fp.add(("projeto", pid))
+    for (mat, _) in d["pessoa"]:
+        fp.add(("pessoa", mat))
+    for (k, _) in d["per_set"]:
+        fp.add(("projeto", k[0]))
+    for k in d["per_del"]:
+        fp.add(("projeto", k[0]))
+    return fp
+
+
+def _footprint_edicoes(ed: dict) -> set:
+    fp: set = set()
+    for s in (ed.get("mes") or {}):
+        p = _split(s)
+        fp.add(("aloc", int(p[0]), p[1], p[2]))
+    for t in (ed.get("aloc_add") or []) + (ed.get("aloc_del") or []):
+        fp.add(("aloc", int(t[0]), t[1], t[2]))
+    for pid in (ed.get("projeto") or {}):
+        fp.add(("projeto", int(pid)))
+    for mat in (ed.get("pessoa") or {}):
+        fp.add(("pessoa", mat))
+    for s in (ed.get("janela") or {}):
+        p = _split(s)
+        fp.add(("projeto", int(p[0])))
+    return fp
+
+
+def _commits_entre(conn: sqlite3.Connection, base: int, tip: int) -> list[dict]:
+    out: list[dict] = []
+    c = tip
+    while c is not None and c != base and len(out) < 200:
+        r = conn.execute(
+            "SELECT commit_id, parent_id, autor, mensagem, criado_em, origem FROM commit_ WHERE commit_id=?",
+            (c,),
+        ).fetchone()
+        if r is None:
+            break
+        out.append({k: r[k] for k in ("commit_id", "autor", "mensagem", "criado_em", "origem")})
+        c = r["parent_id"]
+    return out
+
+
+def _digest(conn: sqlite3.Connection, base: int, tip: int) -> dict:
+    d = _delta(materializar(conn, base), materializar(conn, tip))
+    return {
+        "commits": _commits_entre(conn, base, tip),
+        "resumo": _resumo(d),
+        "pessoas": [_rotulo(conn, "pessoa", m) for (m, _) in d["pessoa"]][:30],
+        "projetos": [_rotulo(conn, "projeto", p) for (p, _) in d["projeto"]][:30],
+    }
+
+
+def commitar_rascunho(conn: sqlite3.Connection, autor: str, ref: str, edicoes: dict,
+                      base_commit_id: int, *, confirmar: bool = False,
+                      mensagem: str = "") -> dict:
+    """Promove um rascunho a commit. Devolve:
+      {nivel:4, conflitos:[...]}         -> conflito real, não commitou
+      {nivel:2|3, digest:{...}}          -> precisa de `confirmar=True`
+      {nivel, commit_id, incorporados}   -> commitou
+    """
+    tip = tip_commit(conn, ref)
+    Eb = materializar(conn, base_commit_id)
+    Et = materializar(conn, tip)
+    Eo = _aplicar_edicoes(Eb, edicoes)
+    if _delta_vazio(_delta(Eb, Eo)):
+        raise NadaParaCommitar("rascunho sem mudanças")
+
+    merged, conf = _merge3(Eb, Eo, Et)
+    if conf:
+        return {"nivel": 4, "conflitos": [
+            {"dominio": dom, "chave": list(k) if isinstance(k, tuple) else k,
+             "rotulo": _rotulo(conn, dom, k), "base": bv, "ours": ov, "theirs": tv}
+            for (dom, k, bv, ov, tv) in conf]}
+
+    if tip == base_commit_id:
+        nivel = 1
+    elif _footprint_delta(_delta(Eb, Et)).isdisjoint(_footprint_edicoes(edicoes)):
+        nivel = 2
+    else:
+        nivel = 3
+
+    row = conn.execute("SELECT sempre_revisar FROM usuario WHERE nome=?", (autor,)).fetchone()
+    sempre = bool(row and row["sempre_revisar"])
+    if (nivel == 3 or (nivel == 2 and sempre)) and not confirmar:
+        return {"nivel": nivel, "digest": _digest(conn, base_commit_id, tip)}
+
+    d = _delta(Et, merged)
+    cid = conn.execute(
+        "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
+        "VALUES (?, NULL, ?, ?, ?, 'manual')",
+        (tip, autor or None, mensagem or f"Alterações de {autor or 'anônimo'}", _now()),
+    ).lastrowid
+    _grava_chg(conn, cid, d)
+    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome=?", (cid, ref))
+    conn.execute("DELETE FROM rascunho WHERE autor=? AND ref_nome=?", (autor, ref))
+
+    hrow = conn.execute("SELECT ref_nome FROM head_ WHERE id=1").fetchone()
+    if hrow and hrow["ref_nome"] == ref:      # branch legada -> mantém working+cache em dia
+        aplicar_ao_working(conn, materializar(conn, cid), escopo=None)
+        conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (cid,))
+    conn.commit()
+    return {"nivel": nivel, "commit_id": cid,
+            "incorporados": _commits_entre(conn, base_commit_id, tip)}
+
+
+# --------------------------------------------------------------------------- #
 # leituras usadas pelo export (substituem baseline.removidas / pessoas_alteradas)
 # --------------------------------------------------------------------------- #
 def removidas(conn: sqlite3.Connection, projeto_id: int) -> list[dict]:
