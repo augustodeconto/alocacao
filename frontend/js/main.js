@@ -242,7 +242,7 @@ function renderGridProjeto() {
   const tb = el("tbody");
 
   for (const proj of g.por_projeto) {
-    if (!gpVisivel(proj.gestor_projetos)) continue;
+    if (!gpVisivel(proj)) continue;
     if (!S.showAll && !proj.tem_futuro) continue;
     const key = `p:${proj.projeto_id}`;
     const janela = new Set(proj.periodos_projeto);
@@ -363,17 +363,21 @@ function render() {
   }
 }
 
-function gpVisivel(gestor) {
-  return !S.gpFilter || gestor === S.gpFilter;
+// identidade de GP do projeto: nome do gestor se conhecido, senão a matrícula GP
+function gpDe(proj) {
+  return proj && (proj.gestor_projetos || proj.matricula_gp) || "";
+}
+function gpVisivel(proj) {
+  return !S.gpFilter || gpDe(proj) === S.gpFilter;
 }
 function projetoIdGestor() {
   const m = {};
-  for (const p of S.estado.projetos) m[p.projeto_id] = p.gestor_projetos;
+  for (const p of S.estado.projetos) m[p.projeto_id] = gpDe(p);
   return m;
 }
 function refreshGpFilter() {
   const sel = $("#gp-filter");
-  const gps = [...new Set(S.estado.projetos.map((p) => p.gestor_projetos).filter(Boolean))].sort();
+  const gps = [...new Set(S.estado.projetos.map(gpDe).filter(Boolean))].sort();
   sel.innerHTML = "";
   sel.append(el("option", { value: "", textContent: "Todos os GPs" }));
   for (const g of gps) sel.append(el("option", { value: g, textContent: g, selected: g === S.gpFilter }));
@@ -454,7 +458,7 @@ function _render() {
   applySelection();
   if (EXCEL) EXCEL.rebuild();
   const pp = S.estado.grade.por_projeto;
-  const visiveis = pp.filter((p) => gpVisivel(p.gestor_projetos) && (S.showAll || p.tem_futuro)).length;
+  const visiveis = pp.filter((p) => gpVisivel(p) && (S.showAll || p.tem_futuro)).length;
   const sujos = pp.filter((p) => p.sujo).length;
   $("#proj-status").textContent =
     `${visiveis}/${pp.length} projeto(s)` + (sujos ? ` · ${sujos} não exportado(s)` : "");
@@ -772,7 +776,7 @@ function openExport() {
       lbl.append(cb, el("span", {}, p.nome),
         p.sujo ? el("span", { className: "dot", title: "não exportado" }, "●") : "");
       lista.append(lbl);
-      return { cb, sujo: !!p.sujo, gp: p.gestor_projetos || "" };
+      return { cb, sujo: !!p.sujo, gp: gpDe(p) };
     });
     if (!visiveis.length) {
       lista.append(el("div", { className: "xp-empty" }, "Nenhum projeto com dados a partir desse mês."));

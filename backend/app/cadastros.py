@@ -101,6 +101,11 @@ def editar_projeto(projeto_id: int, payload: dict = Body(...)):
                     raise HTTPException(409, "já existe projeto com esse Id_projeto")
             sets.append(f"{campo}=?")
             args.append(val)
+            if campo == "matricula_gp":
+                # nome do GP resolvido da matrícula (usado pelo filtro de GP na grade)
+                r = conn.execute("SELECT nome FROM pessoa WHERE matricula=?", (val,)).fetchone() if val else None
+                sets.append("gestor_projetos=?")
+                args.append(r["nome"] if r else None)
         if not sets:
             raise HTTPException(422, "nada para atualizar")
         sets.append("alterado_em=?")

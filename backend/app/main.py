@@ -86,7 +86,8 @@ def _projetos() -> list[dict]:
     return [
         dict(r)
         for r in _conn.execute(
-            """SELECT projeto_id, id_projeto_externo, nome, empresa, status, gestor_projetos,
+            """SELECT projeto_id, id_projeto_externo, nome, empresa, status,
+                      matricula_gp, gestor_projetos,
                       arquivo_origem, criado_na_ferramenta, exportado_em, alterado_em
                FROM projeto ORDER BY nome"""
         )
@@ -319,15 +320,22 @@ def criar_projeto(payload: dict = Body(...)):
         ).fetchone():
             raise HTTPException(409, "já existe projeto com esse Id_projeto")
 
+        mat_gp = (payload.get("matricula_gp") or "").strip() or None
+        gestor = None
+        if mat_gp:
+            r = _conn.execute("SELECT nome FROM pessoa WHERE matricula=?", (mat_gp,)).fetchone()
+            gestor = r["nome"] if r else None
+
         cur = _conn.cursor()
         cur.execute(
             """INSERT INTO projeto
                (id_projeto_externo, nome, empresa, status, id_status, matricula_gp,
-                id_filial, cenario1, cenario2, cenario3, criado_na_ferramenta, alterado_em)
-               VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
+                gestor_projetos, id_filial, cenario1, cenario2, cenario3,
+                criado_na_ferramenta, alterado_em)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)""",
             (
                 str(externo) if externo else None, nome, payload.get("empresa"),
-                payload.get("status"), payload.get("id_status"), payload.get("matricula_gp"),
+                payload.get("status"), payload.get("id_status"), mat_gp, gestor,
                 int(payload.get("id_filial") or 62),
                 payload.get("cenario1"), payload.get("cenario2"), payload.get("cenario3"),
                 _dt.datetime.now().isoformat(timespec="seconds"),

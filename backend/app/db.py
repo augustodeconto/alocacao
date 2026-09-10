@@ -288,6 +288,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if c in cols:
                 conn.execute(f"ALTER TABLE {tbl} DROP COLUMN {c}")
 
+    # projeto criado na ferramenta com matrícula GP mas sem nome do gestor:
+    # resolve pela tabela pessoa (o filtro de GP na grade usa o nome).
+    conn.execute(
+        """UPDATE projeto SET gestor_projetos = (
+               SELECT nome FROM pessoa WHERE pessoa.matricula = projeto.matricula_gp)
+           WHERE gestor_projetos IS NULL AND matricula_gp IS NOT NULL
+             AND EXISTS (SELECT 1 FROM pessoa WHERE pessoa.matricula = projeto.matricula_gp)"""
+    )
+
     have_bp = {r["name"] for r in conn.execute("PRAGMA table_info(bi_projeto)")}
     for col in ("empresa", "status", "gestor"):
         if col not in have_bp:
