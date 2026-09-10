@@ -453,11 +453,17 @@ def branch(conn: sqlite3.Connection, nome: str, a_partir: str | None = None,
         raise ValueError("nome da branch é obrigatório")
     if conn.execute("SELECT 1 FROM ref_ WHERE nome=?", (nome,)).fetchone():
         raise ValueError(f"branch '{nome}' já existe")
-    if a_partir:
-        src = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (a_partir,)).fetchone()
-        if src is None:
+    if a_partir not in (None, ""):
+        # aceita nome de branch OU commit_id (número) como ponto de partida
+        src = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (str(a_partir),)).fetchone()
+        if src is not None:
+            cid = src["commit_id"]
+        elif str(a_partir).lstrip("-").isdigit() and conn.execute(
+            "SELECT 1 FROM commit_ WHERE commit_id=?", (int(a_partir),)
+        ).fetchone():
+            cid = int(a_partir)
+        else:
             raise KeyError(a_partir)
-        cid = src["commit_id"]
     else:
         cid = _head(conn)["base_commit_id"]
     conn.execute("INSERT INTO ref_ (nome, commit_id, criado_em) VALUES (?,?,?)", (nome, cid, _now()))

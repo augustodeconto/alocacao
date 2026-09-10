@@ -428,8 +428,8 @@ td.cell input {
   white-space: nowrap;
 }
 .gg-row:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.gg-actions { visibility: hidden; }
-.gg-row:hover .gg-actions { visibility: visible; }
+.gg-actions { opacity: .35; transition: opacity .1s; }
+.gg-row:hover .gg-actions { opacity: 1; }
 .gg-row.head { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .gg-row.working .gg-msg { font-style: italic; color: var(--muted); }
 .gg-msg { overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 7px; }

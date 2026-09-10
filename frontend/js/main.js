@@ -1488,14 +1488,28 @@ function paintVer() {
     msg.append(el("span", { className: "txt", title: c.mensagem || "" }, c.mensagem || "(sem mensagem)"));
 
     const acts = el("div", { className: "gg-actions" });
+    const ehHead = c.commit_id === g.head_commit;
     acts.append(el("button", {
-      textContent: "⑂ branch", title: "criar branch a partir deste commit",
+      textContent: ehHead ? "⑂ branch aqui" : "↩ voltar aqui",
+      title: ehHead
+        ? "criar uma branch a partir deste commit"
+        : `criar uma branch a partir de #${c.commit_id} e ir para ela (é o jeito de "voltar" a um commit antigo)`,
       onclick: async (ev) => {
         ev.stopPropagation();
-        const nome = prompt("Nome da nova branch (a partir deste commit):");
-        if (!nome) return;
-        try { await api.versaoBranch(nome.trim(), c.commit_id, true); await recarregar(); log(`branch ${nome} criada`); }
-        catch (err) { log(err.message, true); }
+        if (g.sujo) {
+          log("há alterações pendentes — commit ou descarte antes de trocar de versão", true);
+          return;
+        }
+        const sug = ehHead ? "" : `v${c.commit_id}`;
+        const nome = prompt(
+          `Criar branch a partir de #${c.commit_id} ("${(c.mensagem || "").slice(0, 40)}") e ir para ela:`,
+          sug);
+        if (!nome || !nome.trim()) return;
+        try {
+          await api.versaoBranch(nome.trim(), c.commit_id, true);
+          await recarregar();
+          log(`agora em "${nome.trim()}" (a partir de #${c.commit_id})`);
+        } catch (err) { log(err.message, true); }
       },
     }));
 
