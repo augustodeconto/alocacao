@@ -164,8 +164,8 @@ def build_grade(conn: sqlite3.Connection) -> dict:
     # -- por projeto --------------------------------------------------------
     por_projeto: list[dict] = []
     projetos = conn.execute(
-        "SELECT projeto_id, nome, gestor_projetos, status, arquivo_origem, exportado_em, "
-        "alterado_em, criado_na_ferramenta FROM projeto ORDER BY nome"
+        "SELECT projeto_id, nome, matricula_gp, gestor_projetos, status, arquivo_origem, "
+        "exportado_em, alterado_em, criado_na_ferramenta FROM projeto ORDER BY nome"
     ).fetchall()
     hoje = _dt.date.today().replace(day=1).isoformat()
 
@@ -229,6 +229,7 @@ def build_grade(conn: sqlite3.Connection) -> dict:
         por_projeto.append({
             "projeto_id": pid,
             "nome": pr["nome"],
+            "matricula_gp": pr["matricula_gp"],
             "gestor_projetos": pr["gestor_projetos"],
             "status": pr["status"],
             "encerrado": (pr["status"] or "").strip().lower() == "encerrado",
