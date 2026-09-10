@@ -1371,7 +1371,6 @@ function paintVer() {
     : `${g.branch} — em dia`;
   $("#ver-commit").disabled = !g.sujo || !!g.merge;
   $("#ver-descartar-tudo").disabled = !g.sujo;
-  $("#ver-branch-del").disabled = g.refs.length < 2 || !!g.merge;
   $("#ver-merge").disabled = !!g.merge || g.refs.length < 2;
   $("#ver-branch").disabled = g.sujo || !!g.merge;
 
@@ -1477,8 +1476,18 @@ function paintVer() {
   for (const row of rows) {
     const c = row.c;
     const badges = el("span", { style: "display:flex;gap:4px;flex:0 0 auto" });
-    for (const nome of (refsPorCommit[c.commit_id] || []))
-      badges.append(el("span", { className: "gg-badge " + (nome === g.branch ? "head" : "branch") }, nome));
+    for (const nome of (refsPorCommit[c.commit_id] || [])) {
+      const isCur = nome === g.branch;
+      const b = el("span", { className: "gg-badge " + (isCur ? "head" : "branch") }, nome);
+      if (nome !== "main") {
+        b.append(el("span", {
+          className: "gg-badge-x", textContent: "✕",
+          title: isCur ? `apagar "${nome}" (troco para outra branch antes)` : `apagar a branch "${nome}"`,
+          onclick: (ev) => { ev.stopPropagation(); apagarBranch(nome, isCur); },
+        }));
+      }
+      badges.append(b);
+    }
     if (c.origem && c.origem !== "manual")
       badges.append(el("span", { className: "gg-badge origem" }, c.origem));
 
@@ -1564,30 +1573,25 @@ async function verMerge() {
           conflito: `merge com ${(res.conflitos || []).length} conflito(s) — resolva na grade` }[res.status] || "merge");
   } catch (err) { log(err.message, true); }
 }
-async function verDeletarBranch() {
+// apaga uma branch pelo ✕ do seu badge no grafo.
+// atual: o git recusa apagar a branch em que se está -> troca pra outra antes.
+async function apagarBranch(nome, isCur) {
   const g = VER.grafo;
-  const cands = g.refs.map((r) => r.nome).filter((n) => n !== "main");
-  if (!cands.length) { log("só existe a branch main", true); return; }
-  const nome = cands.length === 1
-    ? cands[0]
-    : prompt(`Apagar qual branch?\n(${cands.join(", ")})`, cands.includes(g.branch) ? g.branch : cands[0]);
-  if (!nome || !cands.includes(nome.trim())) return;
-  const alvo = nome.trim();
+  if (nome === "main") return;
   try {
-    if (alvo === g.branch) {
-      // git não deixa apagar a branch atual — troca pra outra antes
-      if (g.sujo) { log(`há alterações pendentes em "${alvo}" — commit ou descarte antes`, true); return; }
-      const destino = cands.filter((n) => n !== alvo).concat("main")[0];
-      if (!confirm(`Você está em "${alvo}".\nTrocar para "${destino}" e apagar "${alvo}"?`)) return;
+    if (isCur) {
+      if (g.sujo) { log(`há alterações pendentes em "${nome}" — commit ou reverta antes`, true); return; }
+      const destino = g.refs.map((r) => r.nome).filter((n) => n !== nome && n !== "main").concat("main")[0];
+      if (!confirm(`Apagar "${nome}"?\nVocê está nela — vou trocar para "${destino}" e apagá-la.`)) return;
       await api.versaoCheckout(destino);
-      await api.versaoDeletarBranch(alvo);
+      await api.versaoDeletarBranch(nome);
       await recarregar();
-      log(`branch "${alvo}" apagada; agora em "${destino}"`);
+      log(`branch "${nome}" apagada; agora em "${destino}"`);
     } else {
-      if (!confirm(`Apagar a branch "${alvo}"? (o que só existe nela é perdido)`)) return;
-      await api.versaoDeletarBranch(alvo);
+      if (!confirm(`Apagar a branch "${nome}"? (o que só existe nela é perdido)`)) return;
+      await api.versaoDeletarBranch(nome);
       await recarregar();
-      log(`branch "${alvo}" apagada`);
+      log(`branch "${nome}" apagada`);
     }
   } catch (err) { log(err.message, true); await renderVer(); }
 }
@@ -1663,7 +1667,6 @@ function wire() {
   $("#ver-commit").onclick = verCommit;
   $("#ver-branch-novo").onclick = verNovaBranch;
   $("#ver-merge").onclick = verMerge;
-  $("#ver-branch-del").onclick = verDeletarBranch;
   $("#ver-descartar-tudo").onclick = verDescartar;
   $("#ver-branch").onchange = (e) => verCheckout(e.target.value);
 

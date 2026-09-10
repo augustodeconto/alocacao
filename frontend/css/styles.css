@@ -443,6 +443,12 @@ td.cell input {
 }
 .gg-badge.branch { background: var(--accent); }
 .gg-badge.head { background: #2c8a4a; }
+.gg-badge-x {
+  cursor: pointer; opacity: 0; margin-left: 1px; font-size: 9px;
+  width: 0; overflow: hidden; transition: opacity .1s, width .1s;
+}
+.gg-badge:hover .gg-badge-x { opacity: .85; width: 10px; }
+.gg-badge-x:hover { opacity: 1 !important; }
 .gg-badge.origem {
   background: transparent; color: var(--muted); font-weight: 500;
   border: 1px solid var(--line); padding: 0 6px;
