@@ -1371,7 +1371,7 @@ function paintVer() {
     : `${g.branch} — em dia`;
   $("#ver-commit").disabled = !g.sujo || !!g.merge;
   $("#ver-descartar-tudo").disabled = !g.sujo;
-  $("#ver-branch-del").disabled = g.branch === "main" || !!g.merge;
+  $("#ver-branch-del").disabled = g.refs.length < 2 || !!g.merge;
   $("#ver-merge").disabled = !!g.merge || g.refs.length < 2;
   $("#ver-branch").disabled = g.sujo || !!g.merge;
 
@@ -1566,13 +1566,37 @@ async function verMerge() {
 }
 async function verDeletarBranch() {
   const g = VER.grafo;
-  if (!confirm(`Apagar a branch "${g.branch}"? (o histórico dela some se não estiver mergeada)`)) return;
-  try { await api.versaoDeletarBranch(g.branch); await recarregar(); log("branch apagada"); }
-  catch (err) { log(err.message, true); }
+  const cands = g.refs.map((r) => r.nome).filter((n) => n !== "main");
+  if (!cands.length) { log("só existe a branch main", true); return; }
+  const nome = cands.length === 1
+    ? cands[0]
+    : prompt(`Apagar qual branch?\n(${cands.join(", ")})`, cands.includes(g.branch) ? g.branch : cands[0]);
+  if (!nome || !cands.includes(nome.trim())) return;
+  const alvo = nome.trim();
+  try {
+    if (alvo === g.branch) {
+      // git não deixa apagar a branch atual — troca pra outra antes
+      if (g.sujo) { log(`há alterações pendentes em "${alvo}" — commit ou descarte antes`, true); return; }
+      const destino = cands.filter((n) => n !== alvo).concat("main")[0];
+      if (!confirm(`Você está em "${alvo}".\nTrocar para "${destino}" e apagar "${alvo}"?`)) return;
+      await api.versaoCheckout(destino);
+      await api.versaoDeletarBranch(alvo);
+      await recarregar();
+      log(`branch "${alvo}" apagada; agora em "${destino}"`);
+    } else {
+      if (!confirm(`Apagar a branch "${alvo}"? (o que só existe nela é perdido)`)) return;
+      await api.versaoDeletarBranch(alvo);
+      await recarregar();
+      log(`branch "${alvo}" apagada`);
+    }
+  } catch (err) { log(err.message, true); await renderVer(); }
 }
 async function verDescartar() {
-  if (!confirm("Descartar TODAS as alterações pendentes?\nEquivale a `git reset --hard` no HEAD.")) return;
-  try { S.estado = (await api.descartarTudo()).estado; render(); await renderVer(); log("alterações descartadas"); }
+  const g = VER.grafo;
+  const n = g && g.pendente ? Object.values(g.pendente).reduce((a, b) => a + b, 0) : 0;
+  if (!confirm(`Reverter ${n} alteração(ões) não commitada(s) em "${g ? g.branch : ""}"?\n`
+    + "Volta ao estado do último commit. Não afeta o histórico.")) return;
+  try { S.estado = (await api.descartarTudo()).estado; render(); await renderVer(); log("alterações pendentes revertidas"); }
   catch (err) { log(err.message, true); }
 }
 
