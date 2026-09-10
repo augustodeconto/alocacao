@@ -39,6 +39,10 @@ class NadaParaCommitar(Exception):
     pass
 
 
+class BranchProtegida(Exception):
+    """Commit direto numa branch protegida (ex.: main)."""
+
+
 class MergeEmAndamento(Exception):
     """Há um merge sem concluir — resolva/conclua ou aborte antes."""
 
@@ -376,6 +380,20 @@ def sujo(conn: sqlite3.Connection) -> bool:
     return not _delta_vazio(diff_pendente(conn))
 
 
+def _protegidas(conn: sqlite3.Connection) -> set[str]:
+    """Branches que não aceitam commit direto. Default {'main'};
+    sobrescrevível por preferencias.chave='branches_protegidas' (csv)."""
+    r = conn.execute("SELECT valor FROM preferencias WHERE chave='branches_protegidas'").fetchone()
+    if r and (r["valor"] or "").strip():
+        return {x.strip() for x in r["valor"].split(",") if x.strip()}
+    return {"main"}
+
+
+def branch_protegida(conn: sqlite3.Connection, nome: str | None = None) -> bool:
+    nome = nome or _head(conn)["ref_nome"]
+    return nome in _protegidas(conn)
+
+
 def commit(conn: sqlite3.Connection, mensagem: str, autor: str = "", origem: str = "manual") -> int:
     _sem_merge(conn)
     h = _head(conn)
@@ -447,12 +465,22 @@ def checkout(conn: sqlite3.Connection, ref: str) -> None:
 
 
 def branch(conn: sqlite3.Connection, nome: str, a_partir: str | None = None,
-           trocar: bool = False) -> None:
+           trocar: bool = False, mover_pendencias: bool = False) -> None:
     nome = (nome or "").strip()
     if not nome:
         raise ValueError("nome da branch é obrigatório")
     if conn.execute("SELECT 1 FROM ref_ WHERE nome=?", (nome,)).fetchone():
         raise ValueError(f"branch '{nome}' já existe")
+
+    if mover_pendencias:
+        # "git switch -c": cria o branch no HEAD atual e leva o working junto.
+        # Não re-materializa (checkout apagaria as pendências).
+        base = _head(conn)["base_commit_id"]
+        conn.execute("INSERT INTO ref_ (nome, commit_id, criado_em) VALUES (?,?,?)", (nome, base, _now()))
+        conn.execute("UPDATE head_ SET ref_nome=? WHERE id=1", (nome,))
+        conn.commit()
+        return
+
     if a_partir not in (None, ""):
         # aceita nome de branch OU commit_id (número) como ponto de partida
         src = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (str(a_partir),)).fetchone()
@@ -521,6 +549,7 @@ def estado_repo(conn: sqlite3.Connection) -> dict:
         n = conn.execute("SELECT COUNT(*) t, SUM(resolvido) r FROM merge_conflito").fetchone()
         merge_info = {"origem": me["origem"], "conflitos": n["t"],
                       "resolvidos": n["r"] or 0}
+    prot = _protegidas(conn)
     return {
         "branch": h["ref_nome"],
         "head_commit": h["base_commit_id"],
@@ -528,6 +557,8 @@ def estado_repo(conn: sqlite3.Connection) -> dict:
         "pendente": _resumo(d),
         "refs": refs,
         "merge": merge_info,
+        "protegida": h["ref_nome"] in prot,
+        "protegidas": sorted(prot),
     }
 
 
@@ -540,6 +571,124 @@ def grafo(conn: sqlite3.Connection, limite: int = 1000) -> dict:
         )
     ]
     return {"commits": commits, **estado_repo(conn)}
+
+
+# --------------------------------------------------------------------------- #
+# diff estruturado (para a tela) — de/para = commit_id ou None(=working)
+# --------------------------------------------------------------------------- #
+def _estado_de(conn: sqlite3.Connection, ref) -> tuple[dict, dict | None]:
+    """`ref` = None -> working; senão commit_id. Devolve (estado, info-commit|None)."""
+    if ref is None:
+        return _estado_working(conn), None
+    cid = int(ref)
+    info = conn.execute(
+        "SELECT commit_id, parent_id, autor, mensagem, criado_em, origem FROM commit_ WHERE commit_id=?",
+        (cid,),
+    ).fetchone()
+    if info is None:
+        raise KeyError(cid)
+    return materializar(conn, cid), dict(info)
+
+
+def diff(conn: sqlite3.Connection, de=None, para=None) -> dict:
+    """Diff estruturado agrupado pelas 4 tabelas versionadas.
+
+    `para` None = working; `de` None = 1º pai de `para` (ou HEAD, se para=working).
+    """
+    para_state, para_info = _estado_de(conn, para)
+    if de is None:
+        if para is None:
+            de = _head(conn)["base_commit_id"]
+        else:
+            de = para_info["parent_id"]
+    de_state, de_info = (({"projeto": {}, "pessoa": {}, "alocacao": {}, "mes": {}, "periodo": {}}, None)
+                         if de is None else _estado_de(conn, de))
+
+    nomes_pr = {r["projeto_id"]: r["nome"] for r in conn.execute("SELECT projeto_id, nome FROM projeto")}
+    nomes_pe = {r["matricula"]: r["nome"] for r in conn.execute("SELECT matricula, nome FROM pessoa")}
+
+    def npr(pid, st):
+        row = st["projeto"].get(pid)
+        return (row and row.get("nome")) or nomes_pr.get(pid) or f"#{pid}"
+
+    def npe(mat, st):
+        row = st["pessoa"].get(mat)
+        return (row and row.get("nome")) or nomes_pe.get(mat) or mat
+
+    # -- projetos / pessoas: campo a campo --
+    def campos(cols, a, b):
+        return [{"campo": c, "de": a.get(c) if a else None, "para": b.get(c) if b else None}
+                for c in cols if (a or {}).get(c) != (b or {}).get(c)]
+
+    projetos = []
+    for pid in sorted(set(de_state["projeto"]) | set(para_state["projeto"]), key=lambda x: str(x)):
+        a, b = de_state["projeto"].get(pid), para_state["projeto"].get(pid)
+        if a == b:
+            continue
+        tag = "adicionada" if a is None else "removida" if b is None else "alterada"
+        projetos.append({"projeto_id": pid, "nome": npr(pid, para_state if b else de_state),
+                         "tag": tag, "campos": campos(PROJETO_COLS, a, b)})
+
+    pessoas = []
+    for mat in sorted(set(de_state["pessoa"]) | set(para_state["pessoa"])):
+        a, b = de_state["pessoa"].get(mat), para_state["pessoa"].get(mat)
+        if a == b:
+            continue
+        tag = "adicionada" if a is None else "removida" if b is None else "alterada"
+        pessoas.append({"matricula": mat, "nome": npe(mat, para_state if b else de_state),
+                        "tag": tag, "campos": campos(PESSOA_COLS, a, b)})
+
+    # -- alocações: agrupa por (projeto, matricula, tipo) --
+    linhas: dict[tuple, dict] = {}
+    all_keys = set(de_state["alocacao"]) | set(para_state["alocacao"])
+    all_keys |= {(k[0], k[1], k[2]) for k in set(de_state["mes"]) | set(para_state["mes"])}
+    for (pid, mat, tp) in all_keys:
+        em_a = (pid, mat, tp) in de_state["alocacao"]
+        em_b = (pid, mat, tp) in para_state["alocacao"]
+        meses = []
+        pers = sorted({k[3] for k in set(de_state["mes"]) | set(para_state["mes"])
+                       if k[:3] == (pid, mat, tp)})
+        for per in pers:
+            va = de_state["mes"].get((pid, mat, tp, per), 0)
+            vb = para_state["mes"].get((pid, mat, tp, per), 0)
+            if va != vb:
+                meses.append({"periodo": per, "de": va, "para": vb})
+        if em_a == em_b and not meses:
+            continue
+        tag = "adicionada" if not em_a and em_b else "removida" if em_a and not em_b else "alterada"
+        linhas[(pid, mat, tp)] = {
+            "projeto": npr(pid, para_state if em_b else de_state),
+            "pessoa": npe(mat, para_state if em_b else de_state),
+            "tipo_alocacao": tp, "tag": tag, "meses": meses,
+        }
+    alocacoes = [linhas[k] for k in sorted(linhas, key=lambda k: (linhas[k]["projeto"].lower(),
+                                                                  linhas[k]["pessoa"].lower(), k[2]))]
+
+    # -- janela de meses --
+    janela = []
+    for (pid, per) in sorted(set(de_state["periodo"]) | set(para_state["periodo"]), key=lambda x: (str(x[0]), x[1])):
+        a = (pid, per) in de_state["periodo"]
+        b = (pid, per) in para_state["periodo"]
+        if a != b:
+            janela.append({"projeto": npr(pid, para_state if b else de_state),
+                           "periodo": per, "tag": "adicionada" if b else "removida"})
+
+    n_cel = sum(len(l["meses"]) for l in alocacoes)
+    return {
+        "de": {"commit_id": de, **({"mensagem": de_info["mensagem"]} if de_info else {"mensagem": "(raiz)"})}
+        if de is not None else {"commit_id": None, "mensagem": "(raiz)"},
+        "para": {"commit_id": para, "mensagem": para_info["mensagem"] if para_info else "alterações não commitadas",
+                 "autor": para_info["autor"] if para_info else None,
+                 "criado_em": para_info["criado_em"] if para_info else None},
+        "resumo": {
+            "projetos": len(projetos), "pessoas": len(pessoas),
+            "alocacoes": len(alocacoes), "celulas": n_cel,
+            "alocacoes_add": sum(1 for l in alocacoes if l["tag"] == "adicionada"),
+            "alocacoes_rem": sum(1 for l in alocacoes if l["tag"] == "removida"),
+            "janela": len(janela),
+        },
+        "projetos": projetos, "pessoas": pessoas, "alocacoes": alocacoes, "janela": janela,
+    }
 
 
 # --------------------------------------------------------------------------- #

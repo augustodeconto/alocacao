@@ -131,23 +131,27 @@
 
     <section id="view-ver" class="view" hidden>
       <div id="ver-toolbar">
-        <span class="tb-group">
-          <label for="ver-branch" class="tb-lbl">branch</label>
-          <select id="ver-branch" title="trocar de branch (checkout)"></select>
-        </span>
+        <span id="ver-cur" class="ver-cur"></span>
         <span class="tb-sep"></span>
         <div class="tb-group">
           <button id="ver-commit" title="commitar as alterações pendentes">✔&nbsp;Commit…</button>
-          <button id="ver-branch-novo" title="criar branch a partir do HEAD">⑂&nbsp;Nova branch…</button>
+          <button id="ver-branch-novo" title="criar branch a partir do HEAD e trabalhar nela">⑂&nbsp;Nova branch…</button>
           <button id="ver-merge" title="trazer outra branch para a atual">⇄&nbsp;Merge…</button>
         </div>
         <span class="tb-sep"></span>
-        <button id="ver-descartar-tudo" title="reverter TODAS as alterações não commitadas — volta ao estado do último commit (git reset --hard)">↺&nbsp;Reverter pendentes</button>
+        <button id="ver-descartar-tudo" title="reverter TODAS as alterações não commitadas — volta ao estado do último commit">↺&nbsp;Reverter pendentes</button>
         <span class="tb-spacer"></span>
         <span class="status" id="ver-status"></span>
       </div>
       <div id="ver-merge-banner" hidden></div>
       <div class="ver-scroll" id="ver-body"></div>
+      <div class="ver-split" id="ver-split" title="arraste para redimensionar"></div>
+      <div id="ver-details">
+        <div class="vd-head">
+          <div class="vd-meta"><div class="vd-msg" id="vd-msg">—</div><div class="vd-sub" id="vd-sub"></div></div>
+        </div>
+        <div class="vd-body" id="vd-body"></div>
+      </div>
     </section>
   </main>
 
@@ -225,6 +229,19 @@
   </div>
   <div class="actions">
     <button value="cancel">Fechar</button>
+  </div>
+</dialog>
+
+<div id="ver-ctx" class="ver-ctx" hidden></div>
+
+<dialog id="dlg-delbranch">
+  <h3>Apagar branch</h3>
+  <div class="body" style="display:block">
+    <p id="db-txt" style="margin:0;color:var(--muted);line-height:1.5"></p>
+  </div>
+  <div class="actions">
+    <button value="cancel">Cancelar</button>
+    <button class="danger" id="db-ok">Apagar</button>
   </div>
 </dialog>
 

@@ -600,12 +600,27 @@ def versao_grafo(limite: int = 1000):
         return versao.grafo(_conn, limite)
 
 
+@app.get("/api/versao/diff")
+def versao_diff(de: int | None = None, para: int | None = None):
+    """Diff estruturado. Sem `para` = working; sem `de` = 1º pai de `para`
+    (ou HEAD, se para=working)."""
+    with _lock:
+        try:
+            return versao.diff(_conn, de=de, para=para)
+        except KeyError as e:
+            raise HTTPException(404, f"commit {e} não existe")
+
+
 @app.post("/api/versao/commit")
 def versao_commit(payload: dict = Body(...)):
     msg = str(payload.get("mensagem") or "").strip()
     if not msg:
         raise HTTPException(422, "mensagem do commit é obrigatória")
     with _lock:
+        if versao.branch_protegida(_conn):
+            raise HTTPException(
+                409, f"'{versao.estado_repo(_conn)['branch']}' é protegida — "
+                "salve o trabalho num branch (\"Salvar em um branch…\") e traga por merge")
         try:
             cid = versao.commit(_conn, msg, autor=str(payload.get("autor") or "").strip())
         except versao.NadaParaCommitar:
@@ -619,8 +634,11 @@ def versao_branch(payload: dict = Body(...)):
     with _lock:
         try:
             versao.branch(_conn, nome, a_partir=payload.get("a_partir"),
-                          trocar=bool(payload.get("trocar")))
+                          trocar=bool(payload.get("trocar")),
+                          mover_pendencias=bool(payload.get("mover_pendencias")))
         except ValueError as e:
+            raise HTTPException(409, str(e))
+        except versao.VersaoSuja as e:
             raise HTTPException(409, str(e))
         except KeyError as e:
             raise HTTPException(404, f"branch {e} não existe")

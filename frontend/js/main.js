@@ -1298,7 +1298,24 @@ const LANE_CORES = ["#2f8fed", "#e0679a", "#d9a441", "#6cc0a4", "#a077e0", "#e07
 const laneCor = (l) => LANE_CORES[((l % LANE_CORES.length) + LANE_CORES.length) % LANE_CORES.length];
 const ggX = (l) => GG.PAD + l * GG.LW;
 
-let VER = { grafo: null };
+let VER = { grafo: null, sel: null };
+
+function startVerSplit(e) {
+  e.preventDefault();
+  const details = $("#ver-details");
+  const startY = e.clientY;
+  const startH = details.getBoundingClientRect().height;
+  const onMove = (ev) => {
+    const h = Math.max(90, Math.min(window.innerHeight * 0.7, startH - (ev.clientY - startY)));
+    details.style.flexBasis = h + "px";
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
 
 async function renderVer() {
   try {
@@ -1357,11 +1374,15 @@ function paintVer() {
   const refsPorCommit = {};
   for (const r of g.refs) (refsPorCommit[r.commit_id] ||= []).push(r.nome);
 
-  // seletor de branch
-  const sel = $("#ver-branch");
-  sel.innerHTML = "";
-  for (const r of g.refs)
-    sel.append(el("option", { value: r.nome, textContent: r.nome, selected: r.nome === g.branch }));
+  // indicador da branch atual (sem ação — troca é pelo botão direito)
+  const cur = $("#ver-cur");
+  cur.innerHTML = "";
+  cur.append(
+    el("span", { className: "dot", style: g.protegida ? "background:var(--muted)" : "" }),
+    document.createTextNode(" em: "),
+    el("b", {}, g.branch),
+    g.protegida ? el("span", { className: "lock", title: "branch protegida — não recebe commit direto" }, " 🔒") : "",
+  );
 
   const pend = g.pendente || {};
   const totalPend = (pend.projeto || 0) + (pend.pessoa || 0) + (pend.alocacoes_novas || 0)
@@ -1369,10 +1390,21 @@ function paintVer() {
   $("#ver-status").textContent = g.sujo
     ? `${totalPend} alteração(ões) pendente(s) em ${g.branch}`
     : `${g.branch} — em dia`;
-  $("#ver-commit").disabled = !g.sujo || !!g.merge;
+
+  const cb = $("#ver-commit");
+  if (g.protegida) {
+    cb.innerHTML = "↪&nbsp;Salvar em um branch…";
+    cb.title = `'${g.branch}' é protegida — mova o trabalho para um branch novo`;
+    cb.onclick = verSalvarEmBranch;
+    cb.disabled = !g.sujo || !!g.merge;
+  } else {
+    cb.innerHTML = "✔&nbsp;Commit…";
+    cb.title = "commitar as alterações pendentes";
+    cb.onclick = verCommit;
+    cb.disabled = !g.sujo || !!g.merge;
+  }
   $("#ver-descartar-tudo").disabled = !g.sujo;
   $("#ver-merge").disabled = !!g.merge || g.refs.length < 2;
-  $("#ver-branch").disabled = g.sujo || !!g.merge;
 
   // banner de merge em andamento
   const banner = $("#ver-merge-banner");
@@ -1460,17 +1492,23 @@ function paintVer() {
 
   // --- lista à direita ---
   const rowsEl = el("div", { className: "gg-rows" });
+  const marcarSel = (key) => {
+    for (const x of rowsEl.querySelectorAll(".gg-row.sel")) x.classList.remove("sel");
+    const t = rowsEl.querySelector(`.gg-row[data-sel="${key}"]`);
+    if (t) t.classList.add("sel");
+  };
+
   if (hasWorking) {
-    const wr = el("div", { className: "gg-row working head" });
+    const wr = el("div", { className: "gg-row working head", dataset: { sel: "working" } });
     wr.append(
       el("div", { className: "gg-msg" },
         el("span", { className: "gg-badge branch" }, g.branch),
         el("span", { className: "txt" }, `alterações não commitadas (${totalPend})`)),
-      el("div", { className: "gg-actions" }),
       el("div", { className: "gg-col" }, "agora"),
       el("div", { className: "gg-col" }, ""),
       el("div", { className: "gg-hash" }, "•"),
     );
+    wr.onclick = () => { VER.sel = { para: null }; marcarSel("working"); carregarDiff({}); };
     rowsEl.append(wr);
   }
   for (const row of rows) {
@@ -1478,69 +1516,239 @@ function paintVer() {
     const badges = el("span", { style: "display:flex;gap:4px;flex:0 0 auto" });
     for (const nome of (refsPorCommit[c.commit_id] || [])) {
       const isCur = nome === g.branch;
-      const b = el("span", { className: "gg-badge " + (isCur ? "head" : "branch") }, nome);
-      if (nome !== "main") {
-        b.append(el("span", {
-          className: "gg-badge-x", textContent: "✕",
-          title: isCur ? `apagar "${nome}" (troco para outra branch antes)` : `apagar a branch "${nome}"`,
-          onclick: (ev) => { ev.stopPropagation(); apagarBranch(nome, isCur); },
-        }));
-      }
+      const b = el("span", { className: "gg-badge " + (isCur ? "head" : "branch"), title: "botão direito: opções da branch" }, nome);
+      b.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); ctxBranch(nome, ev); };
       badges.append(b);
     }
     if (c.origem && c.origem !== "manual")
       badges.append(el("span", { className: "gg-badge origem" }, c.origem));
 
-    const rd = el("div", { className: "gg-row" + (c.commit_id === g.head_commit && !hasWorking ? " head" : "") });
+    const rd = el("div", {
+      className: "gg-row" + (c.commit_id === g.head_commit && !hasWorking ? " head" : ""),
+      dataset: { sel: "c" + c.commit_id },
+    });
     const msg = el("div", { className: "gg-msg" });
     if (badges.childNodes.length) msg.append(badges);
     msg.append(el("span", { className: "txt", title: c.mensagem || "" }, c.mensagem || "(sem mensagem)"));
 
-    const acts = el("div", { className: "gg-actions" });
-    const ehHead = c.commit_id === g.head_commit;
-    acts.append(el("button", {
-      textContent: ehHead ? "⑂ branch aqui" : "↩ voltar aqui",
-      title: ehHead
-        ? "criar uma branch a partir deste commit"
-        : `criar uma branch a partir de #${c.commit_id} e ir para ela (é o jeito de "voltar" a um commit antigo)`,
-      onclick: async (ev) => {
-        ev.stopPropagation();
-        if (g.sujo) {
-          log("há alterações pendentes — commit ou descarte antes de trocar de versão", true);
-          return;
-        }
-        const sug = ehHead ? "" : `v${c.commit_id}`;
-        const nome = prompt(
-          `Criar branch a partir de #${c.commit_id} ("${(c.mensagem || "").slice(0, 40)}") e ir para ela:`,
-          sug);
-        if (!nome || !nome.trim()) return;
-        try {
-          await api.versaoBranch(nome.trim(), c.commit_id, true);
-          await recarregar();
-          log(`agora em "${nome.trim()}" (a partir de #${c.commit_id})`);
-        } catch (err) { log(err.message, true); }
-      },
-    }));
-
     rd.append(
       msg,
-      acts,
       el("div", { className: "gg-col" }, (c.criado_em || "").replace("T", " ").slice(0, 16)),
       el("div", { className: "gg-col", title: c.autor || "" }, c.autor || "—"),
       el("div", { className: "gg-hash" }, "#" + c.commit_id),
     );
+    rd.onclick = () => { VER.sel = { para: c.commit_id }; marcarSel("c" + c.commit_id); carregarDiff({ para: c.commit_id }); };
+    rd.oncontextmenu = (ev) => { ev.preventDefault(); ctxCommit(c, ev); };
     rowsEl.append(rd);
   }
 
   body.innerHTML = "";
-  const grid = el("div", { className: "gg" }, svg, rowsEl);
-  body.append(grid);
+  body.append(el("div", { className: "gg" }, svg, rowsEl));
+
+  // seleção / diff inicial
+  const want = VER.sel && "para" in VER.sel ? VER.sel : { para: hasWorking ? null : g.head_commit };
+  const key = want.para == null ? "working" : "c" + want.para;
+  const still = rowsEl.querySelector(`.gg-row[data-sel="${key}"]`);
+  VER.sel = still ? want : { para: hasWorking ? null : g.head_commit };
+  const k2 = VER.sel.para == null ? "working" : "c" + VER.sel.para;
+  marcarSel(k2);
+  carregarDiff(VER.sel.para == null ? {} : { para: VER.sel.para });
+}
+
+// ---- diff pane -------------------------------------------------------
+async function carregarDiff({ de, para } = {}) {
+  const bd = $("#vd-body");
+  bd.innerHTML = `<div class="vd-empty">carregando…</div>`;
+  try {
+    const d = await api.versaoDiff(de, para);
+    paintDiff(d);
+  } catch (e) {
+    bd.innerHTML = `<div class="vd-empty">falha ao carregar diff: ${e.message}</div>`;
+  }
+}
+
+function paintDiff(d) {
+  const p = d.para, dd = d.de;
+  $("#vd-msg").textContent = p.commit_id == null ? "Alterações não commitadas" : `#${p.commit_id} · ${p.mensagem || "(sem mensagem)"}`;
+  $("#vd-sub").textContent =
+    (p.commit_id == null ? "" : `${p.autor || "—"} · ${(p.criado_em || "").replace("T", " ").slice(0, 16)} · `)
+    + `comparado com ${dd.commit_id == null ? dd.mensagem : "#" + dd.commit_id}`;
+
+  const r = d.resumo;
+  const bd = $("#vd-body");
+  bd.innerHTML = "";
+
+  const grupo = (nome, count, mini, render) => {
+    const has = count > 0;
+    const g = el("div", { className: "vd-grp" + (has ? "" : " closed") });
+    const miniEl = el("span", { className: "mini" });
+    if (mini.a) miniEl.append(el("span", { className: "a" }, "+" + mini.a));
+    if (mini.d) miniEl.append(el("span", { className: "d" }, "−" + mini.d));
+    if (mini.c) miniEl.append(el("span", { className: "c" }, "~" + mini.c));
+    const h = el("div", { className: "vd-grp-h" },
+      el("span", { className: "tw" }, has ? "▾" : "▸"),
+      el("span", { className: "name" }, nome),
+      el("span", { className: "count" }, String(count)),
+      miniEl);
+    const bdy = el("div", { className: "vd-grp-body" });
+    if (has) render(bdy); else bdy.append(el("div", { className: "vd-item", style: "color:var(--muted)" }, "sem alterações"));
+    h.onclick = () => {
+      g.classList.toggle("closed");
+      h.querySelector(".tw").textContent = g.classList.contains("closed") ? "▸" : "▾";
+    };
+    g.append(h, bdy);
+    bd.append(g);
+  };
+
+  const campos = (arr) => {
+    const w = el("div", { className: "vd-fields" });
+    for (const f of arr)
+      w.append(el("span", {},
+        el("span", { className: "f" }, f.campo + " "),
+        el("span", { className: "from" }, f.de == null || f.de === "" ? "∅" : String(f.de)),
+        document.createTextNode(" → "),
+        el("span", { className: "to" }, f.para == null || f.para === "" ? "∅" : String(f.para))));
+    return w;
+  };
+  const linhaItem = (lbl, tag, extra) => {
+    const it = el("div", { className: "vd-item" });
+    it.append(el("div", { className: "vd-item-h" },
+      el("span", { className: "lbl", title: lbl }, lbl),
+      el("span", { className: "vd-tag " + tag }, tag)));
+    if (extra) it.append(extra);
+    return it;
+  };
+
+  grupo("Projetos", r.projetos, { c: r.projetos }, (b) => {
+    for (const x of d.projetos) b.append(linhaItem(x.nome, x.tag, x.campos.length ? campos(x.campos) : null));
+  });
+  grupo("Recursos", r.pessoas, { c: r.pessoas }, (b) => {
+    for (const x of d.pessoas) b.append(linhaItem(x.nome, x.tag, x.campos.length ? campos(x.campos) : null));
+  });
+  grupo("Alocações", r.alocacoes, { a: r.alocacoes_add, d: r.alocacoes_rem, c: r.celulas }, (b) => {
+    for (const x of d.alocacoes) {
+      let cells = null;
+      if (x.meses.length) {
+        cells = el("div", { className: "vd-cells" });
+        for (const m of x.meses)
+          cells.append(el("span", {},
+            el("span", { className: "m" }, fmtMes(m.periodo) + " "),
+            el("span", { className: "from" }, String(m.de)),
+            el("span", { className: "ar" }, "→"),
+            el("span", { className: "to" }, String(m.para))));
+      }
+      b.append(linhaItem(`${x.projeto} · ${x.pessoa} · ${x.tipo_alocacao}`, x.tag, cells));
+    }
+  });
+  grupo("Janela de meses", r.janela, { a: d.janela.filter((j) => j.tag === "adicionada").length,
+                                       d: d.janela.filter((j) => j.tag === "removida").length }, (b) => {
+    for (const x of d.janela) b.append(linhaItem(`${x.projeto} · ${fmtMes(x.periodo)}`, x.tag, null));
+  });
+}
+
+// ---- menus de contexto --------------------------------------------
+function ctxMenu(items, ev) {
+  const m = $("#ver-ctx");
+  m.innerHTML = "";
+  for (const it of items) {
+    if (it.sep) { m.append(el("div", { className: "sep" })); continue; }
+    m.append(el("button", {
+      className: it.danger ? "danger" : "", disabled: !!it.disabled,
+      textContent: it.label,
+      onclick: () => { hideCtx(); it.onClick && it.onClick(); },
+    }));
+  }
+  m.hidden = false;
+  const mw = m.offsetWidth || 210, mh = m.offsetHeight || 40;
+  m.style.left = Math.min(ev.clientX, window.innerWidth - mw - 6) + "px";
+  m.style.top = Math.min(ev.clientY, window.innerHeight - mh - 6) + "px";
+}
+function hideCtx() { const m = $("#ver-ctx"); if (m) m.hidden = true; }
+
+function ctxCommit(c, ev) {
+  const g = VER.grafo;
+  const brs = g.refs.filter((r) => r.commit_id === c.commit_id).map((r) => r.nome);
+  const items = [];
+  for (const nome of brs)
+    if (nome !== g.branch)
+      items.push({ label: `↪ Ir para "${nome}"`, onClick: () => verCheckout(nome) });
+  items.push({ label: "⑂ Criar branch aqui…", onClick: () => criarBranchDe(c) });
+  items.push({ label: "⇆ Ver alterações (vs pai)", onClick: () => {
+    VER.sel = { para: c.commit_id }; carregarDiff({ para: c.commit_id });
+    for (const x of document.querySelectorAll(".gg-row.sel")) x.classList.remove("sel");
+    const t = document.querySelector(`.gg-row[data-sel="c${c.commit_id}"]`); if (t) t.classList.add("sel");
+  } });
+  items.push({ sep: true });
+  items.push({ label: "⧉ Copiar #id", onClick: () => {
+    navigator.clipboard && navigator.clipboard.writeText("#" + c.commit_id);
+    log("#" + c.commit_id + " copiado");
+  } });
+  ctxMenu(items, ev);
+}
+
+function ctxBranch(nome, ev) {
+  const g = VER.grafo;
+  const items = [];
+  if (nome !== g.branch) {
+    items.push({ label: `↪ Trocar para "${nome}"`, onClick: () => verCheckout(nome) });
+    items.push({ label: `⇄ Merge "${nome}" em "${g.branch}"`, disabled: !!g.merge,
+      onClick: () => verMerge(nome) });
+  }
+  items.push({ sep: true });
+  items.push({
+    label: `🗑 Apagar "${nome}"…`, danger: true,
+    disabled: g.protegidas.includes(nome),
+    onClick: () => openDelBranch(nome),
+  });
+  ctxMenu(items, ev);
+}
+
+async function criarBranchDe(c) {
+  if (VER.grafo.sujo) { log("há alterações pendentes — commit ou reverta antes de trocar de versão", true); return; }
+  const nome = prompt(`Criar branch a partir de #${c.commit_id} ("${(c.mensagem || "").slice(0, 40)}") e ir para ela:`,
+    `v${c.commit_id}`);
+  if (!nome || !nome.trim()) return;
+  try { await api.versaoBranch(nome.trim(), c.commit_id, true); await recarregar(); log(`agora em "${nome.trim()}"`); }
+  catch (err) { log(err.message, true); }
+}
+
+function openDelBranch(nome) {
+  const g = VER.grafo;
+  const dlg = $("#dlg-delbranch");
+  const isCur = nome === g.branch;
+  $("#db-txt").textContent = isCur
+    ? `Você está em "${nome}". Ao apagar, troco para outra branch antes. O que só existe em "${nome}" é perdido.`
+    : `A branch "${nome}" será apagada. O que só existe nela é perdido.`;
+  const ok = $("#db-ok");
+  ok.textContent = `Apagar "${nome}"`;
+  ok.onclick = async () => { dlg.close(); await apagarBranch(nome, isCur); };
+  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
+  dlg.showModal();
 }
 
 async function recarregar() {
   S.estado = await api.estado();
   render();
   await renderVer();
+}
+
+async function verSalvarEmBranch() {
+  const hoje = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const nome = prompt("Nome do branch novo (as alterações pendentes vão junto):", `trabalho-${hoje}`);
+  if (!nome || !nome.trim()) return;
+  try {
+    await api.versaoBranch(nome.trim(), null, false, true);   // mover_pendencias
+    await recarregar();
+    log(`agora em "${nome.trim()}" com as pendências`);
+    if (VER.grafo && VER.grafo.sujo) {
+      const m = prompt("Commit agora? Mensagem:");
+      if (m && m.trim()) {
+        await api.versaoCommit(m.trim());
+        await recarregar();
+        log("commit criado em " + nome.trim());
+      }
+    }
+  } catch (err) { log(err.message, true); }
 }
 
 async function verCommit() {
@@ -1551,20 +1759,20 @@ async function verCommit() {
   catch (err) { log(err.message, true); }
 }
 async function verNovaBranch() {
-  const nome = prompt("Nome da nova branch (a partir do HEAD):");
-  if (!nome) return;
-  try { await api.versaoBranch(nome.trim(), null, true); await recarregar(); log(`branch ${nome} criada`); }
+  const nome = prompt("Nome do branch novo (a partir do HEAD, leva as pendências junto):");
+  if (!nome || !nome.trim()) return;
+  try { await api.versaoBranch(nome.trim(), null, false, true); await recarregar(); log(`agora em "${nome.trim()}"`); }
   catch (err) { log(err.message, true); }
 }
 async function verCheckout(ref) {
   if (!ref || ref === (VER.grafo && VER.grafo.branch)) return;
   try { await api.versaoCheckout(ref); await recarregar(); log(`agora em ${ref}`); }
-  catch (err) { log(err.message, true); renderVer(); }   // renderVer p/ reverter o select
+  catch (err) { log(err.message, true); }
 }
-async function verMerge() {
+async function verMerge(origemPre) {
   const g = VER.grafo;
   const outras = g.refs.map((r) => r.nome).filter((n) => n !== g.branch);
-  const origem = prompt(`Trazer qual branch para "${g.branch}"?\n(${outras.join(", ")})`, outras[0] || "");
+  const origem = origemPre || prompt(`Trazer qual branch para "${g.branch}"?\n(${outras.join(", ")})`, outras[0] || "");
   if (!origem) return;
   try {
     const res = await api.versaoMerge(origem.trim());
@@ -1573,22 +1781,18 @@ async function verMerge() {
           conflito: `merge com ${(res.conflitos || []).length} conflito(s) — resolva na grade` }[res.status] || "merge");
   } catch (err) { log(err.message, true); }
 }
-// apaga uma branch pelo ✕ do seu badge no grafo.
-// atual: o git recusa apagar a branch em que se está -> troca pra outra antes.
 async function apagarBranch(nome, isCur) {
   const g = VER.grafo;
-  if (nome === "main") return;
+  if (g.protegidas.includes(nome)) { log(`"${nome}" é protegida`, true); return; }
   try {
     if (isCur) {
       if (g.sujo) { log(`há alterações pendentes em "${nome}" — commit ou reverta antes`, true); return; }
-      const destino = g.refs.map((r) => r.nome).filter((n) => n !== nome && n !== "main").concat("main")[0];
-      if (!confirm(`Apagar "${nome}"?\nVocê está nela — vou trocar para "${destino}" e apagá-la.`)) return;
+      const destino = g.refs.map((r) => r.nome).filter((n) => n !== nome).concat("main")[0];
       await api.versaoCheckout(destino);
       await api.versaoDeletarBranch(nome);
       await recarregar();
       log(`branch "${nome}" apagada; agora em "${destino}"`);
     } else {
-      if (!confirm(`Apagar a branch "${nome}"? (o que só existe nela é perdido)`)) return;
       await api.versaoDeletarBranch(nome);
       await recarregar();
       log(`branch "${nome}" apagada`);
@@ -1664,11 +1868,13 @@ function wire() {
   $("#cad-novo").onclick = openNovoProjeto;
 
   // ---- view Versões (grafo Git) ----
-  $("#ver-commit").onclick = verCommit;
+  // #ver-commit.onclick é setado em paintVer (depende de branch protegida)
   $("#ver-branch-novo").onclick = verNovaBranch;
-  $("#ver-merge").onclick = verMerge;
+  $("#ver-merge").onclick = () => verMerge();
   $("#ver-descartar-tudo").onclick = verDescartar;
-  $("#ver-branch").onchange = (e) => verCheckout(e.target.value);
+  $("#ver-split").addEventListener("mousedown", startVerSplit);
+  document.addEventListener("click", hideCtx);
+  document.addEventListener("scroll", hideCtx, true);
 
   // ---- barra direita (rail + painéis) ----
   for (const b of document.querySelectorAll(".secrail-btn[data-panel]"))

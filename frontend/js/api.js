@@ -36,9 +36,17 @@ export const api = {
   // versionamento (estilo Git)
   versaoGrafo: () => req("GET", "/api/versao/grafo"),
   versaoEstado: () => req("GET", "/api/versao/estado"),
+  versaoDiff: (de, para) => {
+    const q = new URLSearchParams();
+    if (de != null) q.set("de", de);
+    if (para != null) q.set("para", para);
+    return req("GET", `/api/versao/diff?${q}`);
+  },
   versaoCommit: (mensagem) => req("POST", "/api/versao/commit", { mensagem }),
-  versaoBranch: (nome, a_partir, trocar) =>
-    req("POST", "/api/versao/branch", { nome, a_partir: a_partir || null, trocar: !!trocar }),
+  versaoBranch: (nome, a_partir, trocar, mover_pendencias) =>
+    req("POST", "/api/versao/branch", {
+      nome, a_partir: a_partir || null, trocar: !!trocar, mover_pendencias: !!mover_pendencias,
+    }),
   versaoCheckout: (ref) => req("POST", "/api/versao/checkout", { ref }),
   versaoDeletarBranch: (nome) => req("DELETE", `/api/versao/branch/${encodeURIComponent(nome)}`),
   versaoMerge: (origem) => req("POST", "/api/versao/merge", { origem }),
