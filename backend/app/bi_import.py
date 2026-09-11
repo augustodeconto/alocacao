@@ -89,6 +89,7 @@ def classify(sheet) -> str | None:
 def load_equipe(conn: sqlite3.Connection, sheet) -> dict:
     h = _header_index(sheet)
     n_new = n_upd = 0
+    mats: set[str] = set()
     for r in range(2, sheet.max_row + 1):
         row = sheet.row_values(r)
         if not row or row[h["matricula"] - 1] in (None, ""):
@@ -100,6 +101,7 @@ def load_equipe(conn: sqlite3.Connection, sheet) -> dict:
 
         mv = g("matricula")
         matricula = str(int(mv)) if isinstance(mv, float) and mv.is_integer() else str(mv).strip()
+        mats.add(matricula)
         nome = (g("colaborador") or "").strip()
         carga = _num(g("carga horaria")) or None
         fim = _iso_month(g("fim contrato")) if g("fim contrato") else None
@@ -127,7 +129,7 @@ def load_equipe(conn: sqlite3.Connection, sheet) -> dict:
             ),
         )
     conn.commit()
-    return {"arquivo": "colabs", "novos": n_new, "atualizados": n_upd}
+    return {"arquivo": "colabs", "novos": n_new, "atualizados": n_upd, "_matriculas": mats}
 
 
 _SIT_RANK = {"Ativo": 0, "Planejado": 1, "Desligado": 2, None: 3}
@@ -184,10 +186,9 @@ def load_colabmescusto(conn: sqlite3.Connection, sheet) -> dict:
     for matricula, (_, vh) in rate.items():
         conn.execute("UPDATE pessoa SET valor_hora=? WHERE matricula=?", (vh, matricula))
     conn.commit()
-
-    rb = _rebuild_baseline(conn)
+    # o commit do BI é montado depois, uma vez, por importar_arquivos()
     return {"arquivo": "colabmescusto", "linhas": inseridos, "sem_matricula": sem_matricula,
-            "valor_hora": len(rate), **rb}
+            "valor_hora": len(rate)}
 
 
 def _meses_contiguos(ini: str, fim: str) -> list[str]:
@@ -202,25 +203,24 @@ def _meses_contiguos(ini: str, fim: str) -> list[str]:
     return out
 
 
-def _sync_base_campos(conn: sqlite3.Connection) -> None:
-    """Cache global de campos (base_pessoa / base_projeto) := estado atual do
-    working. O BI já atualizou `pessoa` e `projeto` antes deste ponto, então isso
-    grava os valores do BI como 'commitados'."""
+# campos que o BI é dono (o resto de projeto/pessoa pertence ao usuário e NÃO
+# pode ser arrastado para dentro do commit do BI)
+_BI_PROJETO_FIELDS = ["nome", "empresa", "status", "gestor_projetos"]
+_BI_PESSOA_FIELDS = ["nome", "situacao", "area", "tipo_contrato", "fim_contrato",
+                     "carga_diaria", "valor_hora"]
+
+
+def _rebuild_baseline(conn: sqlite3.Connection, fp_matriculas: set[str]) -> dict:
+    """Monta o **estado-alvo do BI** como dict:
+        materializar(topo do branch `BI`)
+        + alocação/janela do `bi_custo` (substitui a dos projetos que o BI cobre)
+        + campos do BI (só `_BI_*_FIELDS`, só nos IDs/matrículas dos extratos).
+    Depois `versao.commitar_estado_bi(E)` -> commit no branch `BI` (+ fast-forward
+    da `main` se ela ainda estiver colada). Não mexe em cache/working aqui — quem
+    decide isso é `importar_arquivos`."""
     from . import versao as _v
 
-    conn.execute("DELETE FROM base_projeto")
-    conn.execute(f"INSERT INTO base_projeto (projeto_id, {','.join(_v.PROJETO_COLS)}) "
-                 f"SELECT projeto_id, {','.join(_v.PROJETO_COLS)} FROM projeto")
-    conn.execute("DELETE FROM base_pessoa")
-    conn.execute(f"INSERT INTO base_pessoa (matricula, {','.join(_v.PESSOA_COLS)}) "
-                 f"SELECT matricula, {','.join(_v.PESSOA_COLS)} FROM pessoa")
-
-
-def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
-    """Monta o estado completo do BI no cache (alocação + janela + campos) a partir
-    do `bi_custo` e registra **um commit na `main`** (`origem='bi'`). Não toca no
-    working de ninguém — `importar_arquivos` restaura o working depois."""
-    from . import versao as _v
+    E = _v.materializar(conn, _v.tip_commit(conn, "BI"))
 
     ext_to_pid = {
         str(r["id_projeto_externo"]): r["projeto_id"]
@@ -228,15 +228,18 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
             "SELECT projeto_id, id_projeto_externo FROM projeto WHERE id_projeto_externo IS NOT NULL"
         )
     }
-    nome_bi = {r["id_projetos"]: r["nome_projeto"] for r in conn.execute("SELECT id_projetos, nome_projeto FROM bi_projeto")}
-    # cria projeto mínimo p/ idProjetos do bi_custo que não veio no projetos.xlsx
-    for idp in {r["id_projetos"] for r in conn.execute("SELECT DISTINCT id_projetos FROM bi_custo WHERE id_projetos > 0")}:
+    nome_bi = {r["id_projetos"]: r["nome_projeto"]
+               for r in conn.execute("SELECT id_projetos, nome_projeto FROM bi_projeto")}
+    bi_ext_ids = {str(r["id_projetos"]) for r in conn.execute("SELECT id_projetos FROM bi_projeto")}
+    bi_ext_ids |= {str(r["id_projetos"]) for r in conn.execute(
+        "SELECT DISTINCT id_projetos FROM bi_custo WHERE id_projetos > 0")}
+    # projeto mínimo p/ idProjetos do bi_custo que não veio no projetos.xlsx (estrutural)
+    for idp in {r["id_projetos"] for r in conn.execute(
+            "SELECT DISTINCT id_projetos FROM bi_custo WHERE id_projetos > 0")}:
         if str(idp) in ext_to_pid:
             continue
-        conn.execute(
-            "INSERT OR IGNORE INTO projeto (id_projeto_externo, nome) VALUES (?,?)",
-            (str(idp), nome_bi.get(idp) or f"#{idp}"),
-        )
+        conn.execute("INSERT OR IGNORE INTO projeto (id_projeto_externo, nome) VALUES (?,?)",
+                     (str(idp), nome_bi.get(idp) or f"#{idp}"))
         ext_to_pid[str(idp)] = conn.execute(
             "SELECT projeto_id FROM projeto WHERE id_projeto_externo=?", (str(idp),)
         ).fetchone()["projeto_id"]
@@ -254,41 +257,54 @@ def _rebuild_baseline(conn: sqlite3.Connection) -> dict:
         grupos.setdefault((pid, r["matricula"], tipo), {})[r["periodo"]] = int(round(r["horas"] or 0))
         meses_proj.setdefault(pid, set()).add(r["periodo"])
 
-    pids = set(meses_proj)
-    for pid in pids:
-        conn.execute("DELETE FROM baseline_alocacao WHERE projeto_id=?", (pid,))
-        conn.execute("DELETE FROM baseline_alocacao_mes WHERE projeto_id=?", (pid,))
-        conn.execute("DELETE FROM projeto_periodo WHERE projeto_id=?", (pid,))
-        conn.execute("DELETE FROM base_projeto_periodo WHERE projeto_id=?", (pid,))
-        ms = sorted(meses_proj[pid])
-        full = _meses_contiguos(ms[0], ms[-1])
-        conn.executemany(
-            "INSERT INTO projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)",
-            [(pid, p, i) for i, p in enumerate(full)],
-        )
-        conn.executemany(
-            "INSERT INTO base_projeto_periodo (projeto_id, periodo, ordem) VALUES (?,?,?)",
-            [(pid, p, i) for i, p in enumerate(full)],
-        )
-
+    # alocação + janela: substitui inteira a dos projetos que o BI cobre
+    for pid, meses in meses_proj.items():
+        E["alocacao"] = {k: v for k, v in E["alocacao"].items() if k[0] != pid}
+        E["mes"] = {k: v for k, v in E["mes"].items() if k[0] != pid}
+        E["periodo"] = {k: v for k, v in E["periodo"].items() if k[0] != pid}
+        ms = sorted(meses)
+        for i, p in enumerate(_meses_contiguos(ms[0], ms[-1])):
+            E["periodo"][(pid, p)] = i
     for (pid, mat, tipo), mm in grupos.items():
         mm = {p: h for p, h in mm.items() if h > 0}
         if not mm:
-            continue  # não guardamos alocação zerada
-        conn.execute(
-            "INSERT INTO baseline_alocacao (projeto_id, matricula, tipo_alocacao) VALUES (?,?,?)",
-            (pid, mat, tipo),
-        )
-        conn.executemany(
-            "INSERT INTO baseline_alocacao_mes (projeto_id, matricula, tipo_alocacao, periodo, horas) VALUES (?,?,?,?,?)",
-            [(pid, mat, tipo, p, h) for p, h in mm.items()],
-        )
+            continue
+        E["alocacao"][(pid, mat, tipo)] = True
+        for p, h in mm.items():
+            E["mes"][(pid, mat, tipo, p)] = h
 
-    _sync_base_campos(conn)
+    # campos de PROJETO — só os do BI, só nos projetos que o BI trouxe
+    pcols = _v.PROJETO_COLS
+    for ext, pid in ext_to_pid.items():
+        if ext not in bi_ext_ids:
+            continue
+        row = conn.execute(f"SELECT {','.join(pcols)} FROM projeto WHERE projeto_id=?", (pid,)).fetchone()
+        if row is None:
+            continue
+        if pid in E["projeto"]:
+            for c in _BI_PROJETO_FIELDS:
+                E["projeto"][pid][c] = row[c]
+        else:
+            E["projeto"][pid] = {c: row[c] for c in pcols}   # projeto novo do BI -> tudo
+
+    # campos de PESSOA — só os do BI, só nas matrículas dos extratos
+    ecols = _v.PESSOA_COLS
+    for mat in fp_matriculas:
+        row = conn.execute(f"SELECT {','.join(ecols)} FROM pessoa WHERE matricula=?", (mat,)).fetchone()
+        if row is None:
+            continue
+        if mat in E["pessoa"]:
+            for c in _BI_PESSOA_FIELDS:
+                E["pessoa"][mat][c] = row[c]
+        else:
+            E["pessoa"][mat] = {c: row[c] for c in ecols}
+
     conn.commit()
-
-    cid = _v.commitar_estado_bi(conn, f"Importação BI {_dt.date.today():%Y-%m-%d}")
-    return {"projetos_baseline": len(pids), "commit_bi": cid}
+    res = _v.commitar_estado_bi(conn, E, f"Importação BI {_dt.date.today():%Y-%m-%d}")
+    return {"projetos_baseline": len(meses_proj),
+            "commit_bi": (res or {}).get("commit_id"),
+            "fast_forward": (res or {}).get("fast_forward"),
+            "_E_bi": E}
 
 
 def load_projetos(conn: sqlite3.Connection, sheet) -> dict:
@@ -390,6 +406,7 @@ def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
     ordem = {"equipe": 0, "projetos": 1, "projetomescusto": 2, "colabmescusto": 3, None: 9}
     classificados.sort(key=lambda t: ordem[t[1]])
 
+    _v.garantir_bi(conn)
     hrow = conn.execute("SELECT ref_nome FROM head_ WHERE id=1").fetchone()
     head_ref = hrow["ref_nome"] if hrow else "main"
     cache0 = _v.snapshot_cache(conn)
@@ -402,9 +419,11 @@ def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
         "aloc_add": d0["aloc_add"], "aloc_del": d0["aloc_del"], "mes": d0["mes"],
         "per_set": d0["per_set"], "per_del": d0["per_del"],
     }
+    main_antes = _v.tip_commit(conn, "main")
 
+    fp_mat: set[str] = set()
+    houve_bi = houve_custo = False
     out: list[dict] = []
-    houve_bi = False
     for p, kind, err in classificados:
         if err:
             out.append({"arquivo": Path(p).name, "status": "erro", "detail": err})
@@ -416,22 +435,42 @@ def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
         fn = {"equipe": load_equipe, "colabmescusto": load_colabmescusto,
               "projetomescusto": load_projetomescusto, "projetos": load_projetos}[kind]
         res = fn(conn, sheet)
+        if kind == "equipe":
+            fp_mat |= res.pop("_matriculas", set())
+        if kind == "colabmescusto":
+            houve_custo = True
         res["status"] = "ok"
         res["arquivo"] = Path(p).name
         out.append(res)
         houve_bi = True
 
-    if houve_bi:
-        if head_ref == "main":
-            # HEAD está na main: cache == estado do BI (montado pelos loaders);
-            # reaplica as edições de alocação/janela do usuário por cima.
-            _v.escrever_working(conn, _v.aplicar_delta(_v._estado_cache(conn), user_d))
+    if houve_custo:
+        fp_mat |= {r["matricula"] for r in conn.execute(
+            "SELECT DISTINCT matricula FROM bi_custo WHERE matricula IS NOT NULL")}
+        rb = _rebuild_baseline(conn, fp_mat)
+        E_bi = rb.pop("_E_bi")
+        rb["arquivo"] = "(commit BI)"
+        rb["status"] = "ok"
+        out.append(rb)
+        main_ff = _v.tip_commit(conn, "main") != main_antes
+        if head_ref == "main" and main_ff:
+            # a `main` (checkout atual) andou junto com o BI -> cache = BI,
+            # working = BI + edições de alocação/janela do usuário reancoradas.
+            _v._cache_set(conn, E_bi, None)
+            _v.escrever_working(conn, _v.aplicar_delta(E_bi, user_d))
         else:
-            # HEAD está numa branch de cenário: o BI commitou na `main`, mas o
-            # cache/working da branch do usuário NÃO podem ser tocados. Restaura.
+            # o BI só avançou o branch `BI` (main divergida, ou você está numa
+            # branch de cenário) -> cache/working do checkout atual ficam intactos.
             _v._cache_set(conn, cache0, None)
             _v.escrever_working(conn, work0)
         conn.commit()
+    elif houve_bi:
+        # colabs/projetos sem colab-mes-custo: nada é commitado. Desfaz os writes
+        # de campo no working (ficam no staging bi_projeto até uma carga completa).
+        _v.escrever_working(conn, work0)
+        conn.commit()
+        out.append({"arquivo": "(sem colab-mes-custo)", "status": "ok",
+                    "detail": "campos no staging; importe junto com o proj-colab-custo p/ gerar o commit"})
     return out
 
 

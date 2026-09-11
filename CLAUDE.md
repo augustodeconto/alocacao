@@ -80,9 +80,15 @@ Full detail + deviations in `docs/VERSIONAMENTO.md`. Module: `backend/app/versao
   OURS until `resolver_conflito` (`lado='ours'|'theirs'` or a custom `valor`). `concluir_merge`
   writes the 2-parent `origem='merge'` commit; `abortar_merge` reverts. `commit`/`checkout`
   raise `MergeEmAndamento` while a merge is open.
-- **Import and export do NOT commit** — they leave working dirty until an explicit
-  `POST /api/versao/commit`. The BI rebuild moves the cache and records one `origem='bi'`
-  commit via `versao.commit_transicao_cache`.
+- **Project-file import and export do NOT commit** — they leave working dirty until an
+  explicit `POST /api/versao/commit`.
+- **BI import commits to a `BI` branch** (B-lite). `versao.garantir_bi` lazily creates the
+  `BI` ref at `main`'s tip on first import; `versao.commitar_estado_bi(E_bi, msg)` writes an
+  `origem='bi'` commit there and **fast-forwards `main`** while `main` has no own commits
+  ahead of `BI`. Once `main` diverges, BI imports only advance `BI`; the user does
+  `merge BI`. `bi_import._rebuild_baseline` builds `E_bi` as a dict = `materializar(BI tip)`
+  + the extracts' footprint only (`_BI_PROJETO_FIELDS` / `_BI_PESSOA_FIELDS`) — it never
+  copies the whole working table, so manual projects/people stay as the user's pending diff.
 - On-screen diff markers (triangles, "novo", strikethrough) and the export's zeroed rows
   are computed as **working vs HEAD cache** (`aggregate.build_grade` reads `baseline_alocacao*`).
 
@@ -115,11 +121,12 @@ epoch 1899-12-30 (`serial_to_date` / `date_to_serial`).
    → `xlsx_import.py` → updates **working only** (replaces that project's allocations). Never
    commits — status `updated`/`imported`; pending until an explicit commit.
 2. **BI extracts** → `POST /api/importar-bi` → `bi_import.importar_arquivos`. Every refresh is
-   the same: build the full BI state → **one commit on `main`** (`origem='bi'`, `autor='BI'`,
-   no 3-way — BI wins for what it covers), via `versao.commitar_estado_bi`. `importar_arquivos`
-   snapshots the working first and, after the commit, re-applies only the pending
-   **allocation/window** edits on top of the BI state (pessoa/projeto field edits are NOT
-   re-anchored — BI owns them). `bi_custo`/`bi_projeto` = staging, not versioned.
+   the same: build `E_bi` (dict) → **one commit on the `BI` branch** (`origem='bi'`, `autor='BI'`,
+   no 3-way — BI wins for what it covers), via `versao.commitar_estado_bi`, which
+   fast-forwards `main` while it hasn't diverged. `_rebuild_baseline` builds `E_bi` =
+   `materializar(BI tip)` + the extracts' footprint only. On a fast-forward with the current
+   checkout on `main`, `importar_arquivos` re-anchors the pending **allocation/window** edits
+   on top; otherwise it restores working/cache untouched. `bi_custo`/`bi_projeto` = staging.
    Name→matricula match is accent-stripped; ambiguous → prefer Ativo, then higher matricula.
 3. **`valor_hora` / `remuneracao`** live in `pessoa`/`base_pessoa`/`chg_pessoa` (the cost
    report needs them) but are **stripped from `/api/estado`** — `main._pessoas()` uses the

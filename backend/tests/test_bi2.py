@@ -109,6 +109,68 @@ def test_bi_nao_toca_branch_de_cenario(conn, sample_path):
     assert conn.execute("SELECT COUNT(*) c FROM alocacao WHERE projeto_id<>1").fetchone()["c"] == 0
 
 
+def test_bi_nao_arrasta_projeto_manual_para_o_commit(conn, sample_path):
+    """Bug: `_sync_base_campos` copiava o working inteiro -> projeto criado na mão
+    entrava no commit `origem='bi'`. Agora o BI só mexe no seu footprint."""
+    from app import versao
+
+    import_workbook(conn, sample_path)
+    importar_arquivos(conn, FILES)                       # BI #1 (fast-forward)
+
+    # usuário cria um projeto na mão + edita a janela de um projeto do BI
+    conn.execute("INSERT INTO projeto (id_projeto_externo, nome, criado_na_ferramenta) "
+                 "VALUES ('MANUAL-1','FEITO NA MAO',1)")
+    pidm = conn.execute("SELECT projeto_id FROM projeto WHERE id_projeto_externo='MANUAL-1'").fetchone()["projeto_id"]
+    conn.execute("INSERT INTO projeto_periodo VALUES (?,?,0)", (pidm, "2026-05-01"))
+    pbi = conn.execute("SELECT projeto_id FROM projeto WHERE id_projeto_externo NOT LIKE 'MANUAL%' LIMIT 1").fetchone()["projeto_id"]
+    conn.execute("INSERT OR REPLACE INTO projeto_periodo VALUES (?, '2099-01-01', 99)", (pbi,))
+    conn.commit()
+    pend_antes = versao.diff_pendente(conn)
+
+    importar_arquivos(conn, FILES)                       # BI #2 (dados iguais)
+
+    # o projeto manual e a edição de janela seguem pendentes; NÃO entraram em commit BI
+    pend_depois = versao.diff_pendente(conn)
+    assert len(pend_depois["projeto"]) == len(pend_antes["projeto"]) == 1
+    assert not conn.execute(
+        "SELECT 1 FROM chg_projeto cp JOIN commit_ c USING(commit_id) "
+        "WHERE c.origem='bi' AND cp.projeto_id=?", (pidm,)).fetchone()
+    assert conn.execute("SELECT 1 FROM projeto WHERE projeto_id=?", (pidm,)).fetchone()
+
+
+def test_bi_reimport_apos_commit_do_usuario_nao_toca_main(conn, sample_path):
+    """B-lite: depois que o usuário faz um commit próprio, `main` diverge do `BI`
+    e uma reimportação do BI não mexe na `main` nem no working."""
+    from app import versao
+
+    import_workbook(conn, sample_path)
+    importar_arquivos(conn, FILES)                       # BI #1: main == BI (fast-forward)
+
+    # commit PRÓPRIO do usuário -> main diverge do BI
+    conn.execute("INSERT INTO projeto (id_projeto_externo, nome, criado_na_ferramenta) "
+                 "VALUES ('MANUAL-2','MEU PROJETO',1)")
+    pidm = conn.execute("SELECT projeto_id FROM projeto WHERE id_projeto_externo='MANUAL-2'").fetchone()["projeto_id"]
+    conn.execute("INSERT INTO alocacao (projeto_id, matricula, tipo_alocacao) VALUES (?, '99999', 'Técnica')", (pidm,))
+    aid = conn.execute("SELECT alocacao_id FROM alocacao WHERE projeto_id=?", (pidm,)).fetchone()["alocacao_id"]
+    conn.execute("INSERT INTO alocacao_mes VALUES (?, '2026-05-01', 40)", (aid,))
+    conn.execute("INSERT OR IGNORE INTO pessoa (matricula, nome) VALUES ('99999','Fulano')")
+    conn.commit()
+    versao.commit(conn, "meu projeto")
+    main2 = versao.tip_commit(conn, "main")
+    w_alocs = conn.execute("SELECT COUNT(*) c FROM alocacao").fetchone()["c"]
+
+    importar_arquivos(conn, FILES)                       # reimport (dados iguais)
+
+    assert versao.tip_commit(conn, "main") == main2                       # main NÃO andou
+    assert conn.execute("SELECT base_commit_id FROM head_ WHERE id=1").fetchone()["base_commit_id"] == main2
+    assert conn.execute("SELECT COUNT(*) c FROM alocacao").fetchone()["c"] == w_alocs   # working intacto
+    assert conn.execute("SELECT projeto_id FROM projeto WHERE id_projeto_externo='MANUAL-2'").fetchone()
+    # "MEU PROJETO" nunca entrou num commit BI
+    assert not conn.execute(
+        "SELECT 1 FROM chg_projeto cp JOIN commit_ c USING(commit_id) "
+        "WHERE c.origem='bi' AND cp.projeto_id=?", (pidm,)).fetchone()
+
+
 def test_bi_preserva_edicao_de_alocacao_pendente(conn, sample_path):
     from app import versao
 

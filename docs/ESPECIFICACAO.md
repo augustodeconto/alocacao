@@ -129,24 +129,29 @@ Dois botões, dois caminhos:
    `cargahoraria Diária` de `Novos_Pesquisadores` → `pessoa.carga_diaria` +
    `capacidade_mensal = carga_diaria × 22`.
 
-### 4b. Extratos do BI → `POST /api/importar-bi`
-Recarga da baseline, **sempre igual**: monta o estado completo do BI (`bi_custo` →
-alocação/janela; `colabs` → campos de `pessoa`; `projetos` → campos de `projeto`;
-`colabmescusto` → `valor_hora`) e grava **um commit na `main`** (`origem='bi'`,
-`autor='BI'`), pegando os valores do BI **como estão** — não há 3-way, não há tela de
-conflito. Para o que o BI cobre, o BI ganha.
-- `bi_projeto` / `bi_custo` são staging (não versionados).
-- **Não encosta no working de ninguém.** `importar_arquivos` fotografa o working antes e,
-  depois do commit, reaplica só as edições de **alocação/janela** pendentes por cima do
-  estado do BI — elas seguem visíveis como diff. Edições de campo de pessoa/projeto **não**
-  são reancoradas (pertencem ao BI).
-- `valor_hora` só é atualizado se o `colabmescusto` está no lote; senão fica intocado.
-- Recarregar o BID no decorrer do projeto = repetir isto: cada refresh = um commit na `main`.
-- Se o HEAD (legado) está numa **branch de cenário** na hora do import do BI: o commit vai
-  pra `main` mesmo assim, e o cache/working da branch são **restaurados** ao estado de antes
-  (a branch não mexe). Projetos/pessoas novos que o BI criou passam a existir e aparecem
-  como pendentes ("novo") na branch até um `merge main` — é o sinal de que há novidade do BI
-  a incorporar.
+### 4b. Extratos do BI → `POST /api/importar-bi`  (branch `BI`, B-lite)
+
+Monta o **estado-alvo do BI** como dict: `materializar(topo do branch BI)` + alocação/janela
+do `bi_custo` (substitui a dos projetos que o BI cobre) + campos do BI (só
+`_BI_PROJETO_FIELDS` = nome/empresa/status/gestor e `_BI_PESSOA_FIELDS` = nome/situacao/area/
+contrato/fim_contrato/carga/valor_hora, **só nos IDs/matrículas dos extratos**). Grava como
+**um commit no branch `BI`** (`origem='bi'`, `autor='BI'`), sem 3-way — o BI é a autoridade
+do que cobre.
+
+- **`bi_projeto` / `bi_custo`** = staging, não versionados. `valor_hora` só muda se o
+  `colabmescusto` está no lote.
+- **O branch `BI` é criado preguiçosamente** (`versao.garantir_bi`) na 1ª importação,
+  apontando para o topo atual da `main` → "main e BI equivalentes por hora".
+- **Fast-forward:** se a `main` ainda está colada no `BI` (nenhum commit próprio à frente),
+  a `main` anda junto (`commitar_estado_bi` move os dois refs). O checkout atual (se for
+  `main`) reancora as edições de **alocação/janela** pendentes por cima; edições de campo de
+  pessoa/projeto **não** são reancoradas (pertencem ao BI).
+- **Divergiu:** no instante em que você faz um commit próprio, `main` ≠ `BI`. Daí em diante
+  a importação **só avança o branch `BI`** — `main`/working não se mexem. Você traz a
+  atualização com `merge BI` (3-way; conflito onde você editou a mesma célula que o BI).
+- **Não arrasta trabalho seu para o commit do BI.** Projeto/pessoa que você criou ou editou
+  fora do footprint do BI segue como **sua** mudança pendente (bug corrigido: o antigo
+  `_sync_base_campos` copiava o working inteiro).
 
 ## 5. Exportação (banco → `.xlsx`)
 
@@ -440,6 +445,14 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-10** — **BI vira branch (`BI`), B-lite + correção do vazamento.** Bug: o import
+  do BI arrastava projetos/pessoas criados na mão para dentro do commit `origem='bi'` (o
+  `_sync_base_campos` copiava o working inteiro). Agora `_rebuild_baseline` monta o
+  estado-alvo do BI como dict = `materializar(topo do BI)` + só o footprint dos extratos
+  (`_BI_PROJETO_FIELDS` / `_BI_PESSOA_FIELDS`). O commit vai pro branch **`BI`** (criado
+  preguiçosamente colado na `main`); a `main` faz **fast-forward** enquanto não tiver commit
+  próprio à frente, e depois de divergir a importação só avança o `BI` — traz-se com
+  `merge BI`. `versao.commitar_estado_bi(E_bi, msg)` / `versao.garantir_bi`.
 - **2026-09-10** — **Import do BI = recarga da baseline, sempre igual.** Monta o estado
   completo do BI e grava **um commit na `main`** (`origem='bi'`, `autor='BI'`, sem 3-way).
   Não encosta no working de ninguém — `importar_arquivos` fotografa o working e reancora só

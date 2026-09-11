@@ -350,6 +350,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"DROP TABLE IF EXISTS {t}")
         conn.execute("PRAGMA user_version = 2")
     conn.commit()
+    # o branch `BI` (B-lite) é criado preguiçosamente na 1ª importação do BI
+    # (versao.garantir_bi), apontando para o topo atual da `main`.
 
 
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

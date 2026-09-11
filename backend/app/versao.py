@@ -399,6 +399,20 @@ def garantir_inicializado(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO head_ (id, ref_nome, base_commit_id) VALUES (1, 'main', ?)", (cid,))
 
 
+def garantir_bi(conn: sqlite3.Connection) -> None:
+    """Cria o ref `BI` **preguiçosamente**, na 1ª importação do BI, apontando para o
+    topo atual da `main`. "main e BI equivalentes por hora": enquanto o BI não é
+    usado, não existe branch; quando é, ele nasce colado onde a `main` está agora,
+    então a 1ª importação faz fast-forward."""
+    if conn.execute("SELECT 1 FROM ref_ WHERE nome='BI'").fetchone():
+        return
+    m = conn.execute("SELECT commit_id FROM ref_ WHERE nome='main'").fetchone()
+    if m:
+        conn.execute("INSERT INTO ref_ (nome, commit_id, criado_em, nota) "
+                     "VALUES ('BI', ?, ?, 'linha oficial do BI')", (m["commit_id"], _now()))
+        conn.commit()
+
+
 def _head(conn: sqlite3.Connection) -> sqlite3.Row:
     garantir_inicializado(conn)
     return conn.execute("SELECT ref_nome, base_commit_id FROM head_ WHERE id=1").fetchone()
@@ -446,51 +460,37 @@ def commit(conn: sqlite3.Connection, mensagem: str, autor: str = "", origem: str
     return cid
 
 
-def commit_transicao_cache(conn: sqlite3.Connection, mensagem: str, origem: str,
-                           cache_antes: dict) -> int | None:
-    """Registra um commit para uma mudança feita DIRETO no cache (ex.: rebuild do BI).
-    O working não é tocado; suas edições passam a diferir do novo commit."""
-    h = _head(conn)
-    d = _delta(cache_antes, _estado_cache(conn))
-    if _delta_vazio(d):
-        return None
-    cid = conn.execute(
-        "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
-        "VALUES (?, NULL, 'sistema', ?, ?, ?)",
-        (h["base_commit_id"], mensagem, _now(), origem),
-    ).lastrowid
-    _grava_chg(conn, cid, d)
-    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome=?", (cid, h["ref_nome"]))
-    conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (cid,))
-    conn.commit()
-    return cid
-
-
 def snapshot_cache(conn: sqlite3.Connection) -> dict:
     return _estado_cache(conn)
 
 
-def commitar_estado_bi(conn: sqlite3.Connection, mensagem: str) -> int | None:
-    """Commit **na `main`** = estado atual do cache (montado pelo rebuild do BI).
-    Sempre `main`, sempre `origem='bi'`, sem 3-way — o BI é a autoridade do que cobre.
-    Não toca em working/rascunho de ninguém. Se o HEAD legado está na `main`,
-    avança `head_.base_commit_id` junto (o cache já reflete o BI)."""
-    parent = tip_commit(conn, "main")
-    d = _delta(materializar(conn, parent), _estado_cache(conn))
+def commitar_estado_bi(conn: sqlite3.Connection, E_bi: dict, mensagem: str) -> dict | None:
+    """Grava `E_bi` (estado-alvo do BI, como dict) como um commit no branch **`BI`**.
+    `origem='bi'`, sem 3-way — o BI é a autoridade do que cobre. Se a `main` está
+    colada no `BI` (nenhum commit próprio à frente), a `main` faz **fast-forward**
+    junto (B-lite: "main e BI equivalentes por hora"). Se a `main` já divergiu, ela
+    não se mexe — o usuário traz o BI depois com um merge.
+    Devolve {commit_id, fast_forward} ou None se nada mudou."""
+    garantir_bi(conn)
+    bi_tip = tip_commit(conn, "BI")
+    d = _delta(materializar(conn, bi_tip), E_bi)
     if _delta_vazio(d):
         return None
     cid = conn.execute(
         "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
         "VALUES (?, NULL, 'BI', ?, ?, 'bi')",
-        (parent, mensagem, _now()),
+        (bi_tip, mensagem, _now()),
     ).lastrowid
     _grava_chg(conn, cid, d)
-    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome='main'", (cid,))
-    hrow = conn.execute("SELECT ref_nome FROM head_ WHERE id=1").fetchone()
-    if hrow and hrow["ref_nome"] == "main":
-        conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (cid,))
+    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome='BI'", (cid,))
+    ff = tip_commit(conn, "main") == bi_tip
+    if ff:
+        conn.execute("UPDATE ref_ SET commit_id=? WHERE nome='main'", (cid,))
+        hrow = conn.execute("SELECT ref_nome FROM head_ WHERE id=1").fetchone()
+        if hrow and hrow["ref_nome"] == "main":
+            conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (cid,))
     conn.commit()
-    return cid
+    return {"commit_id": cid, "fast_forward": ff}
 
 
 def descartar(conn: sqlite3.Connection, projeto_id: int | None = None) -> None:
