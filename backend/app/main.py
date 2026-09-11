@@ -247,9 +247,10 @@ async def importar_projeto(arquivos: list[UploadFile] = File(...)):
 
 @app.post("/api/importar-bi")
 async def importar_bi(arquivos: list[UploadFile] = File(...)):
-    """Extratos do BI (equipe / colabmescusto / projetomescusto) -> banco.
-    Enriquece `pessoa` (capacidade, área, contrato) e popula `bi_projeto` / `bi_custo`."""
-    from .bi_import import importar_arquivos
+    """Fase 1: lê os extratos do BI e monta o relatório do que mudaria — **não commita**.
+    Se `pendente: true`, chame `POST /api/importar-bi/confirmar` para efetivar, ou
+    `POST /api/importar-bi/descartar` para cancelar."""
+    from .bi_import import preparar_importacao
 
     recebidos = [(uf.filename or "bi.xlsx", await uf.read()) for uf in arquivos]
     with _lock:
@@ -258,8 +259,29 @@ async def importar_bi(arquivos: list[UploadFile] = File(...)):
             dest = _unique_path(UPLOAD_DIR / ("bi_" + Path(nome).name))
             dest.write_bytes(data)
             salvos.append(str(dest))
-        resultados = importar_arquivos(_conn, salvos)
-        return {"resultados": resultados, "estado": _estado()}
+        res = preparar_importacao(_conn, salvos)
+        return {**res, "estado": _estado()}
+
+
+@app.post("/api/importar-bi/confirmar")
+def confirmar_importar_bi():
+    from .bi_import import confirmar_importacao
+
+    with _lock:
+        try:
+            res = confirmar_importacao(_conn)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        return {**res, "estado": _estado()}
+
+
+@app.post("/api/importar-bi/descartar")
+def descartar_importar_bi():
+    from .bi_import import descartar_pendente
+
+    with _lock:
+        descartar_pendente(_conn)
+        return {"estado": _estado()}
 
 
 @app.get("/api/custo/projeto")

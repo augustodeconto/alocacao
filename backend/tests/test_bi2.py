@@ -138,6 +138,64 @@ def test_bi_nao_arrasta_projeto_manual_para_o_commit(conn, sample_path):
     assert conn.execute("SELECT 1 FROM projeto WHERE projeto_id=?", (pidm,)).fetchone()
 
 
+def test_bi_preparar_nao_commita_ate_confirmar(conn, sample_path):
+    from app import versao, bi_import
+
+    import_workbook(conn, sample_path)
+    tip0 = versao.tip_commit(conn, "main")
+    p0 = conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"]
+    sujo_antes = versao.sujo(conn)   # já sujo (OTIMIZEPLAN pendente) antes de mexer no BI
+
+    res = bi_import.preparar_importacao(conn, FILES)
+    assert res["pendente"] is True
+    assert res["resumo"]["mudou"] is True
+
+    # nada commitado; a alocação/janela/cache do checkout atual não mudou
+    assert versao.tip_commit(conn, "main") == tip0
+    assert versao.sujo(conn) == sujo_antes
+    assert conn.execute("SELECT COUNT(*) c FROM bi_pendente").fetchone()["c"] == 1
+    # os ~123 projetos do BI existem (o relatório/E_bi precisa deles), mas nenhum
+    # tem alocação/janela no working -- só o de sempre (OTIMIZEPLAN) aparece "de verdade"
+    assert conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"] > p0
+    assert conn.execute("SELECT COUNT(DISTINCT projeto_id) c FROM alocacao").fetchone()["c"] == p0
+
+    r2 = bi_import.confirmar_importacao(conn)
+    assert r2["commit_bi"] is not None
+    assert versao.tip_commit(conn, "main") != tip0
+    assert conn.execute("SELECT COUNT(*) c FROM bi_pendente").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"] > p0
+
+
+def test_bi_descartar_pendente_cancela_e_limpa_residuo(conn, sample_path):
+    from app import versao, bi_import
+
+    import_workbook(conn, sample_path)
+    tip0 = versao.tip_commit(conn, "main")
+    p0 = conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"]
+    bi_import.preparar_importacao(conn, FILES)
+    assert conn.execute("SELECT COUNT(*) c FROM bi_pendente").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"] > p0   # residuo temporário
+
+    bi_import.descartar_pendente(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM bi_pendente").fetchone()["c"] == 0
+    assert versao.tip_commit(conn, "main") == tip0
+    # os projetos/pessoas que só existiam pro relatório pendente somem no descarte
+    assert conn.execute("SELECT COUNT(*) c FROM projeto").fetchone()["c"] == p0
+    with pytest.raises(ValueError):
+        bi_import.confirmar_importacao(conn)
+
+
+def test_bi_reimport_sem_mudanca_nao_fica_pendente(conn, sample_path):
+    from app import bi_import
+
+    import_workbook(conn, sample_path)
+    bi_import.importar_arquivos(conn, FILES)          # confirma a 1a carga
+    res = bi_import.preparar_importacao(conn, FILES)  # 2a leitura, dados iguais
+    assert res["pendente"] is False
+    assert res["resumo"]["mudou"] is False
+    assert conn.execute("SELECT COUNT(*) c FROM bi_pendente").fetchone()["c"] == 0
+
+
 def test_bi_reimport_apos_commit_do_usuario_nao_toca_main(conn, sample_path):
     """B-lite: depois que o usuário faz um commit próprio, `main` diverge do `BI`
     e uma reimportação do BI não mexe na `main` nem no working."""

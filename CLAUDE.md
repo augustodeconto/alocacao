@@ -120,14 +120,22 @@ epoch 1899-12-30 (`serial_to_date` / `date_to_serial`).
 1. **Per-project `.xlsx`** (`dados_projeto` + `Alocacao` + `Planilha4`) → `POST /api/importar-projeto`
    → `xlsx_import.py` → updates **working only** (replaces that project's allocations). Never
    commits — status `updated`/`imported`; pending until an explicit commit.
-2. **BI extracts** → `POST /api/importar-bi` → `bi_import.importar_arquivos`. Every refresh is
-   the same: build `E_bi` (dict) → **one commit on the `BI` branch** (`origem='bi'`, `autor='BI'`,
-   no 3-way — BI wins for what it covers), via `versao.commitar_estado_bi`, which
-   fast-forwards `main` while it hasn't diverged. `_rebuild_baseline` builds `E_bi` =
-   `materializar(BI tip)` + the extracts' footprint only. On a fast-forward with the current
-   checkout on `main`, `importar_arquivos` re-anchors the pending **allocation/window** edits
-   on top; otherwise it restores working/cache untouched. `bi_custo`/`bi_projeto` = staging.
-   Name→matricula match is accent-stripped; ambiguous → prefer Ativo, then higher matricula.
+2. **BI extracts** → **two phases**, both in `bi_import.py`:
+   - `POST /api/importar-bi` → `preparar_importacao`: reads the files, builds `E_bi` (dict =
+     `materializar(BI tip)` + the extracts' footprint only, via `_montar_e_bi`), and returns a
+     `resumo` report. **Commits nothing** — staged in the `bi_pendente` singleton row; any
+     `projeto`/`pessoa` the read had to create to build `E_bi` is deleted again if not
+     confirmed (`_podar_estrutural_novo`).
+   - `POST /api/importar-bi/confirmar` → `confirmar_importacao`: writes **one commit on the
+     `BI` branch** (`origem='bi'`, `autor='BI'`, no 3-way — BI wins for what it covers) via
+     `versao.commitar_estado_bi`, which fast-forwards `main` while it hasn't diverged. On a
+     fast-forward with the current checkout on `main`, it re-anchors pending
+     **allocation/window** edits on top; otherwise working/cache are restored untouched.
+   - `POST /api/importar-bi/descartar` → `descartar_pendente`: cancels, no commit.
+   - `importar_arquivos` = the old one-shot shortcut (prepare + auto-confirm), still used by
+     the "smart" `/api/importar-upload` and the CLI entry point.
+   - `bi_custo`/`bi_projeto` = staging, not versioned. Name→matricula match is
+     accent-stripped; ambiguous → prefer Ativo, then higher matricula.
 3. **`valor_hora` / `remuneracao`** live in `pessoa`/`base_pessoa`/`chg_pessoa` (the cost
    report needs them) but are **stripped from `/api/estado`** — `main._pessoas()` uses the
    `_PESSOA_PUB` column whitelist; `cadastros.py` already excludes them. `valor_hora` is only

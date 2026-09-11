@@ -228,6 +228,15 @@ CREATE TABLE IF NOT EXISTS merge_conflito (
     resolvido   INTEGER NOT NULL DEFAULT 0,
     valor_final TEXT
 );
+-- importação do BI em duas fases: monta + relatório (não commita) -> confirma
+-- (ver bi_import.preparar_importacao / confirmar_importacao). Singleton.
+CREATE TABLE IF NOT EXISTS bi_pendente (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    mensagem    TEXT NOT NULL,
+    e_bi_json   TEXT NOT NULL,
+    resumo_json TEXT NOT NULL,
+    criado_em   TEXT NOT NULL
+);
 -- multiusuário (ver docs/COLABORACAO.md): identidade + rascunho por autor/branch
 CREATE TABLE IF NOT EXISTS usuario (
     nome            TEXT PRIMARY KEY,

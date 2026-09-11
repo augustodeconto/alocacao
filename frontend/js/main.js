@@ -703,20 +703,75 @@ const fileInput = Object.assign(document.createElement("input"), {
   type: "file", accept: ".xlsx", multiple: true, style: "display:none",
 });
 document.body.append(fileInput);
+const RESUMO_BI_LABELS = {
+  projeto: "projetos com campo alterado", pessoa: "pessoas com campo alterado",
+  alocacoes_novas: "alocações novas", alocacoes_removidas: "alocações removidas",
+  celulas: "células de horas alteradas", janela: "janelas de mês alteradas",
+  projetos_no_bi: "projetos com alocação no BI", linhas_custo: "linhas no extrato de custo",
+  linhas_sem_matricula: "linhas sem matrícula (ignoradas)",
+  horas_totais: "horas no extrato", horas_atribuidas: "horas atribuídas a alguém",
+};
+
+function renderRelatorioBI(resumo) {
+  const body = $("#bi-relatorio-body");
+  body.innerHTML = "";
+  if (!resumo.mudou) {
+    body.append(el("p", {}, "Nenhuma mudança em relação ao commit atual do BI — nada para commitar."));
+    return;
+  }
+  const pct = resumo.horas_totais ? Math.round(100 * resumo.horas_atribuidas / resumo.horas_totais) : 0;
+  body.append(el("p", {}, `Cobertura do extrato: ${resumo.horas_atribuidas}/${resumo.horas_totais} horas (${pct}%)` +
+    (resumo.linhas_sem_matricula ? ` · ${resumo.linhas_sem_matricula} linhas sem matrícula` : "")));
+  const ul = el("ul", {});
+  for (const [k, label] of Object.entries(RESUMO_BI_LABELS)) {
+    if (k === "linhas_sem_matricula" || k === "horas_totais" || k === "horas_atribuidas") continue;
+    if (resumo[k] != null) ul.append(el("li", {}, `${resumo[k]} ${label}`));
+  }
+  body.append(ul);
+  body.append(el("p", { className: "muted" },
+    "Isso vira um commit no branch BI (e a main anda junto, se ainda não tiver commit próprio à frente)."));
+}
+
+function pedirConfirmacaoBI(resumo) {
+  return new Promise((resolve) => {
+    const dlg = $("#dlg-bi-relatorio");
+    renderRelatorioBI(resumo);
+    const okBtn = $("#bi-relatorio-confirmar");
+    const cancelBtn = $("#bi-relatorio-cancelar");
+    okBtn.hidden = cancelBtn.hidden = !resumo.mudou;
+    okBtn.onclick = () => { dlg.close(); resolve(true); };
+    cancelBtn.onclick = () => { dlg.close("cancel"); resolve(false); };
+    dlg.addEventListener("cancel", () => resolve(false), { once: true });
+    dlg.showModal();
+  });
+}
+
 fileInput.addEventListener("change", async () => {
   if (!fileInput.files.length) return;
   const arq = $("#arq-log");
   const modo = fileInput.dataset.modo || "projeto";
   try {
-    log("enviando…");
-    if (arq) arq.textContent = "enviando…";
-    const res = modo === "bi"
-      ? await api.importarBI(fileInput.files)
-      : await api.importarProjeto(fileInput.files);
-    S.estado = res.estado;
-    const resumo = res.resultados.map(fmtResultado).join("\n");
-    log(res.resultados.map(fmtResultado).join("  ·  "));
-    if (arq) arq.textContent = resumo;
+    log("lendo…");
+    if (arq) arq.textContent = "lendo…";
+    if (modo === "bi") {
+      const res = await api.importarBI(fileInput.files);
+      S.estado = res.estado;
+      if (arq) arq.textContent = res.resultados.map(fmtResultado).join("\n");
+      if (res.pendente) {
+        const confirmou = await pedirConfirmacaoBI(res.resumo);
+        const res2 = confirmou ? await api.confirmarBI() : await api.descartarBI();
+        S.estado = res2.estado;
+        log(confirmou ? `commit do BI: #${res2.commit_bi}` : "importação do BI descartada");
+      } else {
+        log("BI lido — " + (res.resumo && !res.resumo.mudou ? "sem mudanças, nada commitado" : "nada para commitar"));
+      }
+    } else {
+      const res = await api.importarProjeto(fileInput.files);
+      S.estado = res.estado;
+      const resumo = res.resultados.map(fmtResultado).join("\n");
+      log(res.resultados.map(fmtResultado).join("  ·  "));
+      if (arq) arq.textContent = resumo;
+    }
     render();
     if (S.view === "cad") cadLoad(S.cadTab);
     if (S.view === "ver") renderVer();

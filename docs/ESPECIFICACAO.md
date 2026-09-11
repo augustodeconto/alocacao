@@ -129,14 +129,27 @@ Dois botões, dois caminhos:
    `cargahoraria Diária` de `Novos_Pesquisadores` → `pessoa.carga_diaria` +
    `capacidade_mensal = carga_diaria × 22`.
 
-### 4b. Extratos do BI → `POST /api/importar-bi`  (branch `BI`, B-lite)
+### 4b. Extratos do BI → duas fases (leitura + relatório → confirmação)  (branch `BI`, B-lite)
 
-Monta o **estado-alvo do BI** como dict: `materializar(topo do branch BI)` + alocação/janela
-do `bi_custo` (substitui a dos projetos que o BI cobre) + campos do BI (só
+**Fase 1 — `POST /api/importar-bi`** (`bi_import.preparar_importacao`): lê os arquivos,
+monta o **estado-alvo do BI** como dict (`materializar(topo do branch BI)` + alocação/janela
+do `bi_custo`, substituindo a dos projetos que o BI cobre, + campos do BI — só
 `_BI_PROJETO_FIELDS` = nome/empresa/status/gestor e `_BI_PESSOA_FIELDS` = nome/situacao/area/
-contrato/fim_contrato/carga/valor_hora, **só nos IDs/matrículas dos extratos**). Grava como
-**um commit no branch `BI`** (`origem='bi'`, `autor='BI'`), sem 3-way — o BI é a autoridade
-do que cobre.
+contrato/fim_contrato/carga/valor_hora, **só nos IDs/matrículas dos extratos**) e devolve um
+**relatório** (`resumo`: projetos/pessoas com campo alterado, alocações novas/removidas,
+células e janelas alteradas, cobertura de horas do extrato, linhas sem matrícula).
+**Não commita nada** — fica guardado em `bi_pendente` (singleton) e o working/cache voltam
+exatamente como estavam (inclusive projeto/pessoa que a leitura precisou criar de verdade
+pra montar o relatório — se não for confirmado, são apagados de novo).
+
+**Fase 2** — só roda se o usuário concordar com o relatório:
+- **`POST /api/importar-bi/confirmar`** (`confirmar_importacao`): grava **um commit no
+  branch `BI`** (`origem='bi'`, `autor='BI'`, sem 3-way — o BI é a autoridade do que cobre).
+- **`POST /api/importar-bi/descartar`** (`descartar_pendente`): cancela sem commitar; some
+  também o projeto/pessoa que só existiam pro relatório pendente.
+
+`importar_arquivos(paths)` continua existindo como atalho "prepara e já confirma na hora"
+(usado pelo `/api/importar-upload` esperto e pelo uso via CLI).
 
 - **`bi_projeto` / `bi_custo`** = staging, não versionados. `valor_hora` só muda se o
   `colabmescusto` está no lote.
@@ -445,6 +458,15 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-10** — **Import do BI em duas fases: relatório → confirmação.**
+  `POST /api/importar-bi` lê os arquivos e devolve um relatório (`resumo`) sem commitar nada
+  (`bi_import.preparar_importacao`, guardado em `bi_pendente`); só grava o commit no branch
+  `BI` se o usuário chamar `POST /api/importar-bi/confirmar`
+  (`confirmar_importacao`) — `POST /api/importar-bi/descartar` cancela. Projeto/pessoa que a
+  leitura precisou criar pra montar o relatório são desfeitos se não for confirmado
+  (`_podar_estrutural_novo`). `importar_arquivos` = atalho prepara+confirma (usado pelo
+  `/api/importar-upload` esperto). Frontend: diálogo de relatório com "Confirmar e
+  commitar" / "Descartar" antes de qualquer commit do BI.
 - **2026-09-10** — **BI vira branch (`BI`), B-lite + correção do vazamento.** Bug: o import
   do BI arrastava projetos/pessoas criados na mão para dentro do commit `origem='bi'` (o
   `_sync_base_campos` copiava o working inteiro). Agora `_rebuild_baseline` monta o
