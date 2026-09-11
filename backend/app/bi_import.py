@@ -527,7 +527,7 @@ def preparar_importacao(conn: sqlite3.Connection, paths: list[str]) -> dict:
         guardado = {**resumo, "_pids_novos": pids_novos, "_mats_novos": mats_novos}
         conn.execute(
             "INSERT INTO bi_pendente (id, mensagem, e_bi_json, resumo_json, criado_em) VALUES (1,?,?,?,?)",
-            (f"Importação BI {_dt.date.today():%Y-%m-%d}", _json.dumps(_serializar_estado(E_bi)),
+            (f"Importação do Publicado em {_dt.date.today():%Y-%m-%d}", _json.dumps(_serializar_estado(E_bi)),
              _json.dumps(guardado), _dt.datetime.now().isoformat(timespec="seconds")),
         )
     else:
@@ -538,9 +538,10 @@ def preparar_importacao(conn: sqlite3.Connection, paths: list[str]) -> dict:
     return {"resultados": out, "pendente": resumo["mudou"], "resumo": resumo}
 
 
-def confirmar_importacao(conn: sqlite3.Connection) -> dict:
+def confirmar_importacao(conn: sqlite3.Connection, autor: str = "") -> dict:
     """Fase 2: efetiva o `bi_pendente` de `preparar_importacao` — commit no branch `BI`
-    (+ fast-forward da `main` se ainda estiver colada)."""
+    (+ fast-forward da `main` se ainda estiver colada). `autor` = pessoa que disparou o
+    upload (X-Autor da requisição) — a importação é sempre manual hoje, nunca `SISTEMA`."""
     from . import versao as _v
     import json as _json
 
@@ -561,7 +562,7 @@ def confirmar_importacao(conn: sqlite3.Connection) -> dict:
     }
     main_antes = _v.tip_commit(conn, "main")
 
-    res = _v.commitar_estado_bi(conn, E_bi, row["mensagem"])
+    res = _v.commitar_estado_bi(conn, E_bi, row["mensagem"], autor=autor)
     main_ff = _v.tip_commit(conn, "main") != main_antes
     if head_ref == "main" and main_ff:
         _v._cache_set(conn, E_bi, None)
@@ -590,12 +591,13 @@ def descartar_pendente(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def importar_arquivos(conn: sqlite3.Connection, paths: list[str]) -> list[dict]:
+def importar_arquivos(conn: sqlite3.Connection, paths: list[str], autor: str = "") -> list[dict]:
     """Atalho sem relatório/confirmação: prepara e já confirma na hora. Usado pelo
-    endpoint "esperto" (`/api/importar-upload`) e pelo uso via CLI."""
+    endpoint "esperto" (`/api/importar-upload`) e pelo uso via CLI (CLI não tem X-Autor —
+    fica sem autor, é esperado)."""
     res = preparar_importacao(conn, paths)
     if res["pendente"]:
-        c = confirmar_importacao(conn)
+        c = confirmar_importacao(conn, autor=autor)
         for r in res["resultados"]:
             if r.get("arquivo") == "(relatório BI)":
                 r["arquivo"] = "(commit BI)"

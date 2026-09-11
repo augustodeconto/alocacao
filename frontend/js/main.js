@@ -1,4 +1,4 @@
-import { api } from "./api.js";
+import { api, getAutor, setAutor } from "./api.js";
 import { bindScrollSync, nextSyncMode, syncFlags, scrollRowIntoView, SYNC_MODES } from "./scroll-sync.js";
 import { initExcel } from "./grid-excel.js";
 
@@ -29,7 +29,9 @@ const S = {
   theme: localStorage.getItem("theme") || "auto",      // auto | light | dark
   secW: parseFloat(localStorage.getItem("secW")) || 300,
   cadTab: "projetos",
-  secProjId: null,   // projeto do painel de custo (projeto_id interno)
+  secProjId: null,   // projeto do painel lateral (modo 'projeto')
+  secPessoaMat: null,   // matrícula do painel lateral (modo 'pessoa')
+  secModo: "projeto",   // 'projeto' | 'pessoa' — o que o painel lateral está mostrando
   secPanel: localStorage.getItem("secPanel") || null,   // null | 'custo'
 };
 
@@ -97,10 +99,12 @@ function setOpen(which, open) {
 
 function pct(horas, cap) { return cap ? Math.round((horas / cap) * 100) + "%" : "–"; }
 
-function cellValueNodes(horas, cap) {
+function cellValueNodes(horas, cap, sev) {
   const main = S.displayUnit === "horas" ? String(horas) : pct(horas, cap);
   const twin = S.displayUnit === "horas" ? (cap ? pct(horas, cap) : "") : String(horas);
   const frag = document.createDocumentFragment();
+  const icon = sevIconEl(sev);
+  if (icon) frag.append(icon);
   frag.append(document.createTextNode(main));
   if (twin) frag.append(el("span", { className: "twin" }, twin));
   return frag;
@@ -222,9 +226,47 @@ function totalCell(node, p, { extra } = {}) {
   return monthCell("total", frag, { extra, ...a });
 }
 
+// subalocação (vermelho) é mais grave que superalocação (amarelo) pra planejamento de
+// capacidade — recurso ocioso preocupa mais que recurso sobrecarregado (ver
+// aggregate.cor_pessoa_mes). "over"/"under" aqui são nomes semânticos (não de cor).
 function colorClassFor(cores, periodo) {
   const c = cores && cores[periodo];
-  return c === "vermelho" ? "over" : c === "amarelo" ? "under" : null;
+  return c === "amarelo" ? "over" : c === "vermelho" ? "under" : null;
+}
+
+// Ícones de severidade — pequenos, alongados verticalmente (largura ~ cabe no espaço
+// em branco à esquerda do número grande da célula), sem pintar a célula inteira.
+// mesma família (relógio) pros dois, só que o de superalocação é um despertador tocando
+// — sininhos no topo + ponteiros bem abertos — pra ficar claramente distinto do relógio
+// parado da subalocação mesmo pequeno, mas ainda "parceiro" visualmente.
+const SEV_ICON = {
+  over: {   // superalocado: despertador tocando
+    titulo: "superalocado — acima da capacidade",
+    svg: `<svg viewBox="0 0 14 14" aria-hidden="true">
+      <line x1="2.3" y1="2.6" x2="4" y2="4.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="11.7" y1="2.6" x2="10" y2="4.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <circle cx="7" cy="8" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="7" y1="8" x2="7" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="7" y1="8" x2="9.4" y2="9.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="1.4" y1="9.4" x2="0.4" y2="11.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+      <line x1="12.6" y1="9.4" x2="13.6" y2="11.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+    </svg>`,
+  },
+  under: {   // subalocado: relógio parado (tempo ocioso)
+    titulo: "subalocado — abaixo da capacidade",
+    svg: `<svg viewBox="0 0 14 14" aria-hidden="true">
+      <circle cx="7" cy="7.5" r="5.3" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="7" y1="7.5" x2="7" y2="4.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="7" y1="7.5" x2="9.6" y2="7.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>`,
+  },
+};
+function sevIconEl(sev) {
+  const d = SEV_ICON[sev];
+  if (!d) return null;
+  const span = el("span", { className: `sev-icon sev-${sev}`, title: d.titulo });
+  span.innerHTML = d.svg;
+  return span;
 }
 
 // Linha de alocação que vale a pena mostrar: com "só ativos" ligado, esconde as
@@ -248,13 +290,13 @@ function renderGridProjeto() {
     const janela = new Set(proj.periodos_projeto);
     const acoes = el("span");
     acoes.append(
-      proj.sujo ? el("span", { title: "alterações não commitadas", textContent: " ●" }) : "",
+      proj.sujo ? el("span", { title: "alterações não salvas", textContent: " ●" }) : "",
       el("span", {
-        className: "tw-toggle", title: "reverter as mudanças pendentes deste projeto",
+        className: "tw-toggle", title: "descarta as alterações não salvas deste projeto (reset)",
         textContent: " ↺",
         onclick: async (e) => {
           e.stopPropagation();
-          if (!confirm(`Reverter as mudanças pendentes de "${proj.nome}"?\nVolta ao estado do último commit.`)) return;
+          if (!confirm(`Descartar as alterações não salvas de "${proj.nome}"?\nVolta ao estado da última versão salva.`)) return;
           try { S.estado = (await api.descartarProjeto(proj.projeto_id)).estado; render(); }
           catch (err) { log(err.message, true); }
         },
@@ -295,8 +337,9 @@ function renderGridProjeto() {
         }));
         for (const p of PERIODOS) {
           const h = f.horas[p] || 0;
-          tr.append(monthCell(rem ? "cell" : "cell editable", cellValueNodes(h, f.capacidade_mensal),
-            { per: p, extra: !janela.has(p), colorClass: rem ? null : colorClassFor(f.cores, p), ...altInfo(f, p) }));
+          const sev = rem ? null : colorClassFor(f.cores, p);
+          tr.append(monthCell(rem ? "cell" : "cell editable", cellValueNodes(h, f.capacidade_mensal, sev),
+            { per: p, extra: !janela.has(p), colorClass: sev, ...altInfo(f, p) }));
         }
         tb.append(tr);
       }
@@ -325,8 +368,9 @@ function renderGridRecurso() {
     const tr0 = el("tr", { className: "lvl0", dataset: { matricula: pes.matricula } });
     tr0.append(treeCell(pes.nome, { level: 0, key, expandable: true }));
     for (const p of PERIODOS) {
-      tr0.append(monthCell("total", cellValueNodes(pes.totais[p] || 0, pes.capacidade_mensal),
-        { colorClass: colorClassFor(pes.cores, p), ...totAltInfo(pes, p) }));
+      const sev = colorClassFor(pes.cores, p);
+      tr0.append(monthCell("total", cellValueNodes(pes.totais[p] || 0, pes.capacidade_mensal, sev),
+        { colorClass: sev, ...totAltInfo(pes, p) }));
     }
     tb.append(tr0);
 
@@ -363,20 +407,25 @@ function render() {
   }
 }
 
-// -- filtro de GP: a CHAVE é a matrícula do GP; o nome é só rótulo ----
+// -- filtro de GP: chave = matrícula do GP quando existe; senão, o nome (a
+// importação do BI só traz `gestor_projetos` — nome — nunca a matrícula) --------------
 const GP_SEM = "__sem_gp__";                 // valor da opção "— sem GP —"
-// matrícula do GP como string (a chave); "" quando o projeto não tem GP
+const GP_NOME_PFX = "nome:";                 // prefixo pra não colidir com chave-matrícula
+// chave do GP do projeto; "" quando o projeto não tem GP nenhum
 function gpDe(proj) {
   const m = proj && proj.matricula_gp;
-  return m == null || m === "" ? "" : String(m).trim();
+  if (m != null && String(m).trim() !== "") return String(m).trim();
+  const n = proj && proj.gestor_projetos;
+  return n == null || String(n).trim() === "" ? "" : GP_NOME_PFX + String(n).trim();
 }
 
-function gpNome(mat) {
-  if (!mat) return "(sem GP)";
-  const pe = (S.estado.pessoas || []).find((p) => String(p.matricula) === mat);
+function gpNome(chave) {
+  if (!chave) return "(sem GP)";
+  if (chave.startsWith(GP_NOME_PFX)) return chave.slice(GP_NOME_PFX.length);
+  const pe = (S.estado.pessoas || []).find((p) => String(p.matricula) === chave);
   if (pe && pe.nome) return pe.nome;
-  const pr = (S.estado.projetos || []).find((p) => gpDe(p) === mat && p.gestor_projetos);
-  return (pr && pr.gestor_projetos) || mat;   // sem nome conhecido: mostra a própria matrícula
+  const pr = (S.estado.projetos || []).find((p) => gpDe(p) === chave && p.gestor_projetos);
+  return (pr && pr.gestor_projetos) || chave;   // sem nome conhecido: mostra a própria matrícula
 }
 
 function gpVisivel(proj) {
@@ -395,9 +444,10 @@ function refreshGpFilter() {
   if (temSem) sel.append(el("option", { value: GP_SEM, textContent: "— sem GP —" }));
   for (const m of mats) {
     const nome = gpNome(m);
+    const temMatricula = !m.startsWith(GP_NOME_PFX);
     sel.append(el("option", {
       value: m, selected: m === S.gpFilter,
-      textContent: nome === m ? m : `${nome}  ·  ${m}`,
+      textContent: temMatricula && nome !== m ? `${nome}  ·  ${m}` : nome,
     }));
   }
   const validos = new Set(["", GP_SEM, ...mats]);
@@ -461,6 +511,7 @@ async function redo() {
 }
 
 function _render() {
+  renderUsuarioBadge();
   const sp = { pl: panelProj.scrollLeft, pt: panelProj.scrollTop, rl: panelRec.scrollLeft, rt: panelRec.scrollTop };
   PERIODOS = computePeriodos();
   refreshGpFilter();
@@ -510,10 +561,11 @@ function scrollToCurrentMonth() {
   // scrollLeft em coords de conteúdo: idx colunas de mês à esquerda do alvo
   // (a 1ª coluna é fixa e não conta). Deixa o mês atual logo após ela.
   const alvo = Math.max(0, idx * MONTH_W);
-  requestAnimationFrame(() => {
-    panelProj.scrollLeft = alvo;
-    panelRec.scrollLeft = alvo;
-  });
+  const aplicar = () => { panelProj.scrollLeft = alvo; panelRec.scrollLeft = alvo; };
+  // 1 rAF às vezes não é suficiente (fonte carregando, sticky recalculando, sync de
+  // scroll entre os dois painéis) — dá 2 frames + reforça uma vez mais tarde.
+  requestAnimationFrame(() => requestAnimationFrame(aplicar));
+  setTimeout(aplicar, 80);
 }
 
 // -- selection sync --------------------------------------------------
@@ -608,15 +660,33 @@ function onRowClick(e, sourceGrid) {
   if (!tr) return;
   S.selAloc = tr.dataset.alocacaoId ? Number(tr.dataset.alocacaoId) : null;
   S.selMatricula = tr.dataset.matricula || null;
-  applySelection();
+
+  // clicar no projeto (nível 0, Por Projeto) já expande os tipos de alocação dele —
+  // evita um segundo clique só pra ver quem está alocado.
+  const ehLinhaProjeto = tr.classList.contains("lvl0") && tr.dataset.projetoId != null && !tr.dataset.alocacaoId;
+  let precisaRender = false;
+  if (ehLinhaProjeto) {
+    const pid = Number(tr.dataset.projetoId);
+    const pkey = `p:${pid}`;
+    if (isCollapsed(pkey)) { S.open.add(pkey); precisaRender = true; }
+    const proj = (S.estado.grade.por_projeto || []).find((p) => p.projeto_id === pid);
+    for (const grp of proj?.grupos || []) {
+      const gkey = `g:${pid}:${grp.tipo_alocacao}`;
+      if (isCollapsed(gkey)) { S.open.add(gkey); precisaRender = true; }
+    }
+    if (precisaRender) persistOpen();
+  }
+  if (precisaRender) render(); else applySelection();
   pushSel();
   const flags = syncFlags(S.syncMode);
   if (sourceGrid === "projeto" && flags.down) syncPara("recurso", S.selAloc, S.selMatricula);
   if (sourceGrid === "recurso" && flags.up) syncPara("projeto", S.selAloc, S.selMatricula);
 
-  let pid = projetoIdSelecionado();
-  if (pid == null && tr.dataset.projetoId) pid = Number(tr.dataset.projetoId);
-  if (pid != null) openCusto(pid);
+  // painel lateral: uma pessoa clicada (linha de alocação, em qualquer uma das duas
+  // grades, ou a linha de topo da pessoa em Por Recurso) manda mais que o projeto — só a
+  // linha de topo do projeto (sem pessoa nenhuma envolvida) abre o custo do projeto.
+  if (S.selMatricula) openResumoPessoa(S.selMatricula);
+  else if (ehLinhaProjeto) openCusto(Number(tr.dataset.projetoId));
 }
 
 // -- cell editing --------------------------------------------------
@@ -716,7 +786,7 @@ function renderRelatorioBI(resumo) {
   const body = $("#bi-relatorio-body");
   body.innerHTML = "";
   if (!resumo.mudou) {
-    body.append(el("p", {}, "Nenhuma mudança em relação ao commit atual do BI — nada para commitar."));
+    body.append(el("p", {}, "Nenhuma mudança em relação ao Publicado atual — nada para salvar."));
     return;
   }
   const pct = resumo.horas_totais ? Math.round(100 * resumo.horas_atribuidas / resumo.horas_totais) : 0;
@@ -764,9 +834,9 @@ fileInput.addEventListener("change", async () => {
         if (res.resumo.mudou) {
           const res2 = confirmou ? await api.confirmarBI() : await api.descartarBI();
           S.estado = res2.estado;
-          log(confirmou ? `commit do BI: #${res2.commit_bi}` : "importação do BI descartada");
+          log(confirmou ? `versão salva no Publicado: #${res2.commit_bi}` : "importação do BI descartada");
         } else {
-          log("BI lido — sem mudanças, nada commitado");
+          log("BI lido — sem mudanças, nada para salvar");
         }
       } else {
         log("sem colab-mes-custo no lote — nada para relatar ainda");
@@ -925,6 +995,7 @@ function toggleUnidade() {
   localStorage.setItem("displayUnit", S.displayUnit);
   $("#btn-unidade").textContent = "Exibir: " + (S.displayUnit === "horas" ? "Horas" : "%");
   render();
+  renderSecondary();   // o painel lateral (resumo de pessoa) também segue horas/%
 }
 
 function cycleSync() {
@@ -1007,8 +1078,8 @@ function applyTheme() {
   const root = document.documentElement;
   if (S.theme === "auto") root.removeAttribute("data-theme");
   else root.setAttribute("data-theme", S.theme);
-  const btn = $("#rail-theme");
-  if (btn) btn.title = "Tema: " + { auto: "automático", light: "claro", dark: "escuro" }[S.theme];
+  // o botão do rail agora é Configurações (engrenagem) — o tema mora lá dentro
+  // (#cfg-tema), o rail só mostra o badge de quem está conectado (renderUsuarioBadge).
 }
 function cycleTheme() {
   S.theme = { auto: "light", light: "dark", dark: "auto" }[S.theme] || "auto";
@@ -1049,8 +1120,10 @@ function startWResize(e) {   // só a barra secundária (direita)
 //  BARRA DIREITA (rail + painéis).  Custo do projeto = 1º painel.
 // ==================================================================
 const SEC_PANELS = {
-  custo: { titulo: "Custo do projeto", render: () => renderCusto() },
-  // futuros painéis entram aqui (resumo, capacidade da equipe, …)
+  // 1 painel só por ora: mostra o resumo do que foi clicado por último — projeto (com
+  // custo) ou pessoa (sem custo, só alocação). Ver docs/ESPECIFICACAO.md.
+  custo: { titulo: "Resumo", render: () => (S.secModo === "pessoa" ? renderResumoPessoa() : renderCusto()) },
+  // futuros painéis entram aqui (capacidade da equipe, …)
 };
 
 function renderSecondary() {
@@ -1079,10 +1152,19 @@ function closeSecPanel() {
 }
 function openCusto(projetoId) {
   S.secProjId = projetoId;
+  S.secModo = "projeto";
+  if (S.secPanel == null) { S.secPanel = "custo"; localStorage.setItem("secPanel", "custo"); }
+  renderSecondary();
+}
+function openResumoPessoa(matricula) {
+  S.secPessoaMat = matricula;
+  S.secModo = "pessoa";
   if (S.secPanel == null) { S.secPanel = "custo"; localStorage.setItem("secPanel", "custo"); }
   renderSecondary();
 }
 function maybeOpenCusto() {
+  // mesma prioridade do clique: pessoa manda mais que projeto (ver onRowClick)
+  if (S.selMatricula) { openResumoPessoa(S.selMatricula); return; }
   const pid = projetoIdSelecionado();
   if (pid != null) openCusto(pid);
 }
@@ -1090,6 +1172,9 @@ function maybeOpenCusto() {
 const CUSTO_CORES = ["var(--accent)", "#e8b23a", "#6cc0a4", "#c07ad6", "#e0796b", "#7f9cd6"];
 const _brl = (n) => n >= 1e6 ? `R$ ${(n / 1e6).toFixed(2)} M`
   : n >= 1e3 ? `R$ ${(n / 1e3).toFixed(0)} k` : `R$ ${Math.round(n)}`;
+// valor completo, no centavo — pra tabela/lista (o KPI grande em cima pode ficar abreviado,
+// mas a lista mês a mês e o total da tabela têm que mostrar o valor exato)
+const _brlFull = (n) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 async function renderCusto() {
   const body = $("#sec-body");
@@ -1144,7 +1229,7 @@ async function renderCusto() {
 
     body.innerHTML = `
       <div class="sec-kpis">
-        <div><div class="lbl">Total (daqui pra frente)</div><div class="val">${_brl(totGeral)}</div></div>
+        <div><div class="lbl">Total (mês atual em diante)</div><div class="val" title="${_brlFull(totGeral)}">${_brl(totGeral)}</div></div>
         <div><div class="lbl">Horas</div><div class="val">${Math.round(horasGeral).toLocaleString("pt-BR")}</div></div>
       </div>
       <svg class="sec-donut" width="128" height="128" viewBox="0 0 42 42" role="img" aria-label="composição do custo por tipo">
@@ -1154,14 +1239,149 @@ async function renderCusto() {
       <div class="sec-legend">${porTipo.map((t, i) =>
         `<span><i style="background:${CUSTO_CORES[i % CUSTO_CORES.length]}"></i>${t.nome} ${totGeral ? Math.round(t.custo / totGeral * 100) : 0}%</span>`).join("")}
       </div>
-      <div class="sec-h">Custo por mês</div>
+      <div class="sec-h">Custo por mês <span class="sec-h-total">· total ${_brlFull(totGeral)}</span></div>
       <div class="sec-bars">${pers.map((p) => {
         const v = totMes[p] || 0;
-        return `<div class="b"><span class="m">${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxMes * 100).toFixed(1)}%"></span></span><span class="n">${_brl(v)}</span></div>`;
+        return `<div class="b"><span class="m">${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxMes * 100).toFixed(1)}%"></span></span><span class="n">${_brlFull(v)}</span></div>`;
       }).join("")}</div>`;
   } catch (err) {
     body.innerHTML = `<div class="sec-empty">falha ao carregar custo: ${err.message}</div>`;
   }
+}
+
+const _fmtData = (iso) => {
+  if (!iso) return null;
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${y}`;
+};
+const CUSTO_COR_PESSOA = { vermelho: "#e0796b", amarelo: "#e8b23a" };
+
+// Resumo de uma pessoa: ficha (vínculo/carga/fim de contrato), alocação no tempo (mês
+// atual em diante) e principais projetos — nunca custo (ver docs/TERMINOLOGIA.md/ESPECIFICACAO.md,
+// resumo de pessoa é só alocação).
+function renderResumoPessoa() {
+  const body = $("#sec-body");
+  const mat = S.secPessoaMat;
+  if (mat == null) {
+    body.innerHTML = `<div class="sec-empty">Selecione uma pessoa na grade para ver o resumo.</div>`;
+    return;
+  }
+  const pes = (S.estado?.pessoas || []).find((p) => p.matricula === mat);
+  const rec = (S.estado?.grade?.por_recurso || []).find((r) => r.matricula === mat);
+  const nome = pes?.nome || rec?.nome || mat;
+  $("#sec-title").textContent = "Resumo · " + nome;
+  if (!rec) {
+    body.innerHTML = `<div class="sec-empty">${nome} não tem alocação lançada.</div>`;
+    return;
+  }
+
+  const cargo = pes?.tipo_contrato || "";
+  const ficha = [];
+  if (pes?.situacao && pes.situacao !== cargo) ficha.push(pes.situacao);
+  if (pes?.carga_diaria) ficha.push(`${pes.carga_diaria}h/dia`);
+  if (pes?.capacidade_mensal) ficha.push(`${Math.round(pes.capacidade_mensal)}h/mês`);
+  const fim = pes?.fim_contrato;
+  const fimFmt = _fmtData(fim);
+  const fimVencido = !!(fim && fim.slice(0, 10) < new Date().toISOString().slice(0, 10));
+
+  const hoje = currentMonthISO();
+  const periodos = (S.estado?.grade?.periodos || PERIODOS || []).filter((p) => p >= hoje);
+  const totais = rec.totais || {};
+  const cores = rec.cores || {};
+  const cap = pes?.capacidade_mensal || 0;
+  const maxH = Math.max(1, cap, ...periodos.map((p) => totais[p] || 0));
+  const unidade = S.displayUnit;   // "horas" | "pct" — segue o botão "Exibir" da toolbar
+
+  // agrega horas por projeto e período (uma pessoa pode ter mais de um tipo_alocacao
+  // no mesmo projeto — soma tudo debaixo do nome do projeto)
+  const porProjetoPeriodo = {};
+  for (const f of rec.filhos || []) {
+    const alvo = porProjetoPeriodo[f.projeto_nome] || (porProjetoPeriodo[f.projeto_nome] = {});
+    for (const [per, v] of Object.entries(f.horas || {})) alvo[per] = (alvo[per] || 0) + v;
+  }
+  const somaDe = (obj) => periodos.reduce((s, p) => s + (obj[p] || 0), 0);
+  // só projetos com alguma hora de fato no período mostrado (mês atual em diante) — um
+  // projeto em que ela só trabalhou no passado (ex. "Férias" de anos atrás) não entra
+  // nem no gráfico nem na legenda, mesmo que apareça em rec.filhos.
+  const projetos = Object.keys(porProjetoPeriodo)
+    .map((n) => [n, somaDe(porProjetoPeriodo[n])])
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const projNomes = projetos.map(([n]) => n);
+  const totalHoras = projetos.reduce((a, [, v]) => a + v, 0);
+  const cores2 = projNomes.map((_, i) => CUSTO_CORES[i % CUSTO_CORES.length]);
+
+  // gráfico de área empilhado (uma camada por projeto), em horas ou % da capacidade
+  let areaSvg = `<div class="sec-empty">sem alocação futura em nenhum projeto</div>`;
+  let legenda = "";
+  if (periodos.length && projNomes.length) {
+    const valorDe = (h) => unidade === "pct" ? (cap ? h / cap * 100 : 0) : h;
+    const W = 280, H = 110, PB = 4, PT = 6;
+    const n = periodos.length;
+    const xOf = (i) => n > 1 ? (i / (n - 1)) * W : W / 2;
+    const cumu = periodos.map(() => 0);
+    let maxY = unidade === "pct" ? 100 : (cap || maxH);
+    const camadas = projNomes.map((nomeProj, i) => {
+      const serie = periodos.map((p, idx) => {
+        const v = Math.max(0, valorDe(porProjetoPeriodo[nomeProj][p] || 0));
+        const base = cumu[idx];
+        cumu[idx] = base + v;
+        maxY = Math.max(maxY, cumu[idx]);
+        return { base, topo: base + v };
+      });
+      return { nome: nomeProj, cor: cores2[i], serie };
+    });
+    const yOf = (v) => H - PB - (v / maxY) * (H - PB - PT);
+    const pathDe = (serie) => {
+      const topo = serie.map((s, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)} ${yOf(s.topo).toFixed(1)}`).join(" ");
+      const baixo = serie.slice().reverse().map((s, i) => `L${xOf(n - 1 - i).toFixed(1)} ${yOf(s.base).toFixed(1)}`).join(" ");
+      return `${topo} ${baixo} Z`;
+    };
+    const marcasX = periodos.map((p, i) => {
+      const passo = Math.max(1, Math.ceil(n / 6));
+      if (i % passo !== 0 && i !== n - 1) return "";
+      return `<span style="left:${(xOf(i) / W * 100).toFixed(1)}%">${fmtMes(p)}</span>`;
+    }).join("");
+    // eixo Y: 0 / metade / topo — topo = capacidade (ou 100%); linha do topo mais
+    // marcada (é o teto real), a do meio só uma referência solta.
+    const topoRotulo = unidade === "pct" ? "100%" : (cap ? `${Math.round(cap)}h` : `${Math.round(maxY)}h`);
+    const meioVal = maxY / 2;
+    const meioRotulo = unidade === "pct" ? "50%" : `${Math.round(meioVal)}h`;
+    const temTeto = unidade === "pct" || !!cap;
+    areaSvg = `
+      <div class="sec-area-wrap">
+        <div class="sec-area-y"><span>${topoRotulo}</span><span>${meioRotulo}</span><span>0</span></div>
+        <svg class="sec-area" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="alocação ao longo do tempo, por projeto">
+          <line x1="0" y1="${yOf(meioVal).toFixed(1)}" x2="${W}" y2="${yOf(meioVal).toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3"/>
+          ${temTeto ? `<line x1="0" y1="${yOf(maxY).toFixed(1)}" x2="${W}" y2="${yOf(maxY).toFixed(1)}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>` : ""}
+          ${camadas.map((c) => `<path d="${pathDe(c.serie)}" fill="${c.cor}" fill-opacity=".82"/>`).join("")}
+        </svg>
+      </div>
+      <div class="sec-area-eixo">${marcasX}</div>`;
+    legenda = `<div class="sec-legend">${projNomes.map((n, i) =>
+      `<span><i style="background:${cores2[i]}"></i>${n}</span>`).join("")}</div>`;
+  }
+
+  body.innerHTML = `
+    <div class="sec-pessoa-nome">${nome}</div>
+    ${cargo ? `<div class="sec-pessoa-cargo">${cargo}</div>` : ""}
+    ${ficha.length || fimFmt ? `<div class="sec-pessoa-ficha">${ficha.join(" · ")}${ficha.length && fimFmt ? " · " : ""}${
+      fimFmt ? `<span class="${fimVencido ? "sec-vencido" : ""}">contrato até ${fimFmt}</span>` : ""}</div>` : ""}
+    <div class="sec-h">Alocação ao longo do tempo <span class="sec-h-total">· mês atual em diante</span></div>
+    ${areaSvg}
+    ${legenda}
+    ${projetos.length ? `
+    <div class="sec-h">Principais projetos <span class="sec-h-total">· mês atual em diante</span></div>
+    <div class="sec-bars">${projetos.slice(0, 6).map(([nomeProj, v], i) =>
+      `<div class="b sec-b-proj"><span class="m sec-m-proj" title="${nomeProj}">${nomeProj}</span><span class="track"><span class="fill" style="width:${(totalHoras ? v / totalHoras * 100 : 0).toFixed(1)}%;background:${cores2[projNomes.indexOf(nomeProj)]}"></span></span><span class="n">${Math.round(v)}h</span></div>`).join("")}
+    </div>` : `<div class="sec-empty">sem alocação futura em nenhum projeto</div>`}
+    <div class="sec-h">Alocação mês a mês</div>
+    <div class="sec-bars">${periodos.length ? periodos.map((p) => {
+      const v = totais[p] || 0;
+      const cor = CUSTO_COR_PESSOA[cores[p]] || "var(--accent)";
+      return `<div class="b"><span class="m">${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxH * 100).toFixed(1)}%;background:${cor}"></span></span><span class="n">${Math.round(v)}h <span class="sec-twin">${pct(v, cap)}</span></span></div>`;
+    }).join("") : `<div class="sec-empty">sem meses à frente carregados</div>`}</div>
+  `;
 }
 
 // ==================================================================
@@ -1355,6 +1575,12 @@ function layoutGrafo(commits) {
   return { rows, lanes: Math.max(1, maxLane) };
 }
 
+// nome da branch (técnico) -> nome do cenário na interface (ver docs/TERMINOLOGIA.md)
+const nomeCenario = (nome) => (nome === "main" ? "Corrente" : nome === "BI" ? "Publicado" : nome);
+// contagem primeiro, concordância em número/gênero, sem parênteses: "1 alteração não
+// salva" / "3 alterações não salvas" (ver docs/TERMINOLOGIA.md §15)
+const alteracoesTxt = (n) => `${n} alteraç${n === 1 ? "ão" : "ões"} não salva${n === 1 ? "" : "s"}`;
+
 function ggEdge(x0, y0, x1, y1) {
   if (x0 === x1) return `M${x0} ${y0}L${x0} ${y1}`;
   const my = (y0 + y1) / 2;
@@ -1373,49 +1599,49 @@ function paintVer() {
   cur.append(
     el("span", { className: "dot", style: g.protegida ? "background:var(--muted)" : "" }),
     document.createTextNode(" em: "),
-    el("b", {}, g.branch),
-    g.protegida ? el("span", { className: "lock", title: "branch protegida — não recebe commit direto" }, " 🔒") : "",
+    el("b", {}, nomeCenario(g.branch)),
+    g.protegida ? el("span", { className: "lock", title: "Corrente é protegida — não recebe versão direta; salve num cenário" }, " 🔒") : "",
   );
 
   const pend = g.pendente || {};
   const totalPend = (pend.projeto || 0) + (pend.pessoa || 0) + (pend.alocacoes_novas || 0)
     + (pend.alocacoes_removidas || 0) + (pend.celulas || 0) + (pend.janela || 0);
   $("#ver-status").textContent = g.sujo
-    ? `${totalPend} alteração(ões) pendente(s) em ${g.branch}`
-    : `${g.branch} — em dia`;
+    ? `${alteracoesTxt(totalPend)} em ${nomeCenario(g.branch)}`
+    : `${nomeCenario(g.branch)} — em dia`;
 
   const cb = $("#ver-commit");
   if (g.protegida) {
-    cb.innerHTML = "↪&nbsp;Salvar em um branch…";
-    cb.title = `'${g.branch}' é protegida — mova o trabalho para um branch novo`;
+    cb.innerHTML = "↪&nbsp;Salvar num cenário…";
+    cb.title = `'${nomeCenario(g.branch)}' é protegida — mova o trabalho para um cenário novo`;
     cb.onclick = verSalvarEmBranch;
     cb.disabled = !g.sujo || !!g.merge;
   } else {
-    cb.innerHTML = "✔&nbsp;Commit…";
-    cb.title = "commitar as alterações pendentes";
+    cb.innerHTML = "✔&nbsp;Salvar versão…";
+    cb.title = "Salva uma versão. (commit)";
     cb.onclick = verCommit;
     cb.disabled = !g.sujo || !!g.merge;
   }
   $("#ver-descartar-tudo").disabled = !g.sujo;
   $("#ver-merge").disabled = !!g.merge || g.refs.length < 2;
 
-  // banner de merge em andamento
+  // banner de incorporação (merge) em andamento
   const banner = $("#ver-merge-banner");
   if (g.merge) {
     banner.hidden = false;
     banner.innerHTML = "";
     banner.append(
-      el("span", {}, `Merge de "${g.merge.origem}" em andamento — ${g.merge.resolvidos}/${g.merge.conflitos} conflitos resolvidos.`),
+      el("span", {}, `Incorporação de "${nomeCenario(g.merge.origem)}" em andamento — ${g.merge.resolvidos}/${g.merge.conflitos} conflitos resolvidos.`),
       el("button", { textContent: "Concluir", disabled: g.merge.resolvidos < g.merge.conflitos,
         onclick: async () => {
-          const m = prompt("Mensagem do commit de merge:", `Merge ${g.merge.origem} em ${g.branch}`);
+          const m = prompt("Mensagem da versão de incorporação:", `Incorporar ${nomeCenario(g.merge.origem)} em ${nomeCenario(g.branch)}`);
           if (m == null) return;
-          try { await api.versaoMergeConcluir(m.trim() || `Merge ${g.merge.origem}`); await recarregar(); log("merge concluído"); }
+          try { await api.versaoMergeConcluir(m.trim() || `Incorporar ${nomeCenario(g.merge.origem)}`); await recarregar(); log("cenário incorporado"); }
           catch (err) { log(err.message, true); }
         } }),
       el("button", { textContent: "Abortar", onclick: async () => {
-        if (!confirm("Abortar o merge? As resoluções serão perdidas.")) return;
-        try { await api.versaoMergeAbortar(); await recarregar(); log("merge abortado"); }
+        if (!confirm("Abortar a incorporação? As resoluções serão perdidas.")) return;
+        try { await api.versaoMergeAbortar(); await recarregar(); log("incorporação abortada"); }
         catch (err) { log(err.message, true); }
       } }),
     );
@@ -1425,7 +1651,7 @@ function paintVer() {
 
   // --- grafo ---
   const commits = g.commits;
-  if (!commits.length) { body.innerHTML = `<div class="gg-empty">Sem commits.</div>`; return; }
+  if (!commits.length) { body.innerHTML = `<div class="gg-empty">Sem versões.</div>`; return; }
   const { rows, lanes } = layoutGrafo(commits);
   const idxDe = {};
   commits.forEach((c, i) => { idxDe[c.commit_id] = i; });
@@ -1509,8 +1735,8 @@ function paintVer() {
     const wr = el("div", { className: "gg-row working head", dataset: { sel: "working" } });
     wr.append(
       el("div", { className: "gg-msg" },
-        el("span", { className: "gg-badge branch" }, g.branch),
-        el("span", { className: "txt" }, `alterações não commitadas (${totalPend})`)),
+        el("span", { className: "gg-badge branch" }, nomeCenario(g.branch)),
+        el("span", { className: "txt" }, alteracoesTxt(totalPend))),
       el("div", { className: "gg-col" }, "agora"),
       el("div", { className: "gg-col" }, ""),
       el("div", { className: "gg-hash" }, "•"),
@@ -1523,7 +1749,7 @@ function paintVer() {
     const badges = el("span", { style: "display:flex;gap:4px;flex:0 0 auto" });
     for (const nome of (refsPorCommit[c.commit_id] || [])) {
       const isCur = nome === g.branch;
-      const b = el("span", { className: "gg-badge " + (isCur ? "head" : "branch"), title: "botão direito: opções da branch" }, nome);
+      const b = el("span", { className: "gg-badge " + (isCur ? "head" : "branch"), title: "botão direito: opções do cenário" }, nomeCenario(nome));
       b.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); ctxBranch(nome, ev); };
       badges.append(b);
     }
@@ -1591,11 +1817,11 @@ async function carregarDiff({ de, para } = {}) {
 function paintDiff(d) {
   const p = d.para, dd = d.de;
   const explicito = VER.sel && VER.sel.de != null;
-  const alvo = p.commit_id == null ? "working" : "#" + p.commit_id;
+  const alvo = p.commit_id == null ? "alterações não salvas" : "#" + p.commit_id;
   const base = dd.commit_id == null ? dd.mensagem : "#" + dd.commit_id;
   $("#vd-msg").textContent = explicito
     ? `${base}  →  ${alvo}`
-    : (p.commit_id == null ? "Alterações não commitadas" : `#${p.commit_id} · ${p.mensagem || "(sem mensagem)"}`);
+    : (p.commit_id == null ? "Alterações não salvas" : `#${p.commit_id} · ${p.mensagem || "(sem mensagem)"}`);
   const sub = $("#vd-sub");
   sub.textContent =
     (p.commit_id == null || explicito ? "" : `${p.autor || "—"} · ${(p.criado_em || "").replace("T", " ").slice(0, 16)} · `)
@@ -1705,8 +1931,8 @@ function ctxCommit(c, ev) {
   const items = [];
   for (const nome of brs)
     if (nome !== g.branch)
-      items.push({ label: `↪ Ir para "${nome}"`, onClick: () => verCheckout(nome) });
-  items.push({ label: "⑂ Criar branch aqui…", onClick: () => criarBranchDe(c) });
+      items.push({ label: `↪ Abrir "${nomeCenario(nome)}"`, onClick: () => verCheckout(nome) });
+  items.push({ label: "⑂ Criar cenário aqui…", onClick: () => criarBranchDe(c) });
   items.push({ sep: true });
   items.push({ label: "⇆ Ver alterações (vs pai)",
     onClick: () => selecionarVer({ de: null, para: c.commit_id }) });
@@ -1719,7 +1945,7 @@ function ctxCommit(c, ev) {
     });
   if (VER.grafo.sujo)
     items.push({
-      label: "⇆ Comparar com o working",
+      label: "⇆ Comparar com as alterações não salvas",
       onClick: () => selecionarVer({ de: c.commit_id, para: null }),
     });
   items.push({ sep: true });
@@ -1734,13 +1960,13 @@ function ctxBranch(nome, ev) {
   const g = VER.grafo;
   const items = [];
   if (nome !== g.branch) {
-    items.push({ label: `↪ Trocar para "${nome}"`, onClick: () => verCheckout(nome) });
-    items.push({ label: `⇄ Merge "${nome}" em "${g.branch}"`, disabled: !!g.merge,
+    items.push({ label: `↪ Abrir "${nomeCenario(nome)}"`, onClick: () => verCheckout(nome) });
+    items.push({ label: `⇄ Incorporar "${nomeCenario(nome)}" em "${nomeCenario(g.branch)}"`, disabled: !!g.merge,
       onClick: () => verMerge(nome) });
   }
   items.push({ sep: true });
   items.push({
-    label: `🗑 Apagar "${nome}"…`, danger: true,
+    label: `🗑 Apagar "${nomeCenario(nome)}"…`, danger: true,
     disabled: g.protegidas.includes(nome),
     onClick: () => openDelBranch(nome),
   });
@@ -1748,8 +1974,8 @@ function ctxBranch(nome, ev) {
 }
 
 async function criarBranchDe(c) {
-  if (VER.grafo.sujo) { log("há alterações pendentes — commit ou reverta antes de trocar de versão", true); return; }
-  const nome = prompt(`Criar branch a partir de #${c.commit_id} ("${(c.mensagem || "").slice(0, 40)}") e ir para ela:`,
+  if (VER.grafo.sujo) { log("há alterações não salvas — salve uma versão ou descarte antes de abrir outro cenário", true); return; }
+  const nome = prompt(`Criar cenário a partir da versão #${c.commit_id} ("${(c.mensagem || "").slice(0, 40)}") e abrir:`,
     `v${c.commit_id}`);
   if (!nome || !nome.trim()) return;
   try { await api.versaoBranch(nome.trim(), c.commit_id, true); await recarregar(); log(`agora em "${nome.trim()}"`); }
@@ -1761,10 +1987,10 @@ function openDelBranch(nome) {
   const dlg = $("#dlg-delbranch");
   const isCur = nome === g.branch;
   $("#db-txt").textContent = isCur
-    ? `Você está em "${nome}". Ao apagar, troco para outra branch antes. O que só existe em "${nome}" é perdido.`
-    : `A branch "${nome}" será apagada. O que só existe nela é perdido.`;
+    ? `Você está em "${nomeCenario(nome)}". Ao apagar, troco para outro cenário antes. O que só existe em "${nomeCenario(nome)}" é perdido.`
+    : `O cenário "${nomeCenario(nome)}" será apagado. O que só existe nele é perdido.`;
   const ok = $("#db-ok");
-  ok.textContent = `Apagar "${nome}"`;
+  ok.textContent = `Apagar "${nomeCenario(nome)}"`;
   ok.onclick = async () => { dlg.close(); await apagarBranch(nome, isCur); };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
   dlg.showModal();
@@ -1778,77 +2004,77 @@ async function recarregar() {
 
 async function verSalvarEmBranch() {
   const hoje = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const nome = prompt("Nome do branch novo (as alterações pendentes vão junto):", `trabalho-${hoje}`);
+  const nome = prompt("Nome do cenário novo:", `trabalho-${hoje}`);
   if (!nome || !nome.trim()) return;
   try {
     await api.versaoBranch(nome.trim(), null, false, true);   // mover_pendencias
     await recarregar();
     log(`agora em "${nome.trim()}" com as pendências`);
     if (VER.grafo && VER.grafo.sujo) {
-      const m = prompt("Commit agora? Mensagem:");
+      const m = prompt("Salvar uma versão agora? Mensagem:");
       if (m && m.trim()) {
         await api.versaoCommit(m.trim());
         await recarregar();
-        log("commit criado em " + nome.trim());
+        log("versão salva em " + nome.trim());
       }
     }
   } catch (err) { log(err.message, true); }
 }
 
 async function verCommit() {
-  const m = prompt("Mensagem do commit:");
+  const m = prompt("Mensagem da versão:");
   if (m == null) return;
   if (!m.trim()) { log("mensagem obrigatória", true); return; }
-  try { await api.versaoCommit(m.trim()); await recarregar(); log("commit criado"); }
+  try { await api.versaoCommit(m.trim()); await recarregar(); log("versão salva"); }
   catch (err) { log(err.message, true); }
 }
 async function verNovaBranch() {
-  const nome = prompt("Nome do branch novo (a partir do HEAD, leva as pendências junto):");
+  const nome = prompt("Nome do cenário novo:");
   if (!nome || !nome.trim()) return;
   try { await api.versaoBranch(nome.trim(), null, false, true); await recarregar(); log(`agora em "${nome.trim()}"`); }
   catch (err) { log(err.message, true); }
 }
 async function verCheckout(ref) {
   if (!ref || ref === (VER.grafo && VER.grafo.branch)) return;
-  try { await api.versaoCheckout(ref); await recarregar(); log(`agora em ${ref}`); }
+  try { await api.versaoCheckout(ref); await recarregar(); log(`agora em ${nomeCenario(ref)}`); }
   catch (err) { log(err.message, true); }
 }
 async function verMerge(origemPre) {
   const g = VER.grafo;
   const outras = g.refs.map((r) => r.nome).filter((n) => n !== g.branch);
-  const origem = origemPre || prompt(`Trazer qual branch para "${g.branch}"?\n(${outras.join(", ")})`, outras[0] || "");
+  const origem = origemPre || prompt(`Incorporar qual cenário em "${nomeCenario(g.branch)}"?\n(${outras.join(", ")})`, outras[0] || "");
   if (!origem) return;
   try {
     const res = await api.versaoMerge(origem.trim());
     await recarregar();
-    log({ "em-dia": "já está em dia", "fast-forward": "fast-forward", ok: "merge ok",
-          conflito: `merge com ${(res.conflitos || []).length} conflito(s) — resolva na grade` }[res.status] || "merge");
+    log({ "em-dia": "já está em dia", "fast-forward": "incorporado (sem conflitos)", ok: "cenário incorporado",
+          conflito: `incorporação com ${(res.conflitos || []).length} conflito(s) — resolva na grade` }[res.status] || "incorporado");
   } catch (err) { log(err.message, true); }
 }
 async function apagarBranch(nome, isCur) {
   const g = VER.grafo;
-  if (g.protegidas.includes(nome)) { log(`"${nome}" é protegida`, true); return; }
+  if (g.protegidas.includes(nome)) { log(`"${nomeCenario(nome)}" é protegida`, true); return; }
   try {
     if (isCur) {
-      if (g.sujo) { log(`há alterações pendentes em "${nome}" — commit ou reverta antes`, true); return; }
+      if (g.sujo) { log(`há alterações não salvas em "${nomeCenario(nome)}" — salve uma versão ou descarte antes`, true); return; }
       const destino = g.refs.map((r) => r.nome).filter((n) => n !== nome).concat("main")[0];
       await api.versaoCheckout(destino);
       await api.versaoDeletarBranch(nome);
       await recarregar();
-      log(`branch "${nome}" apagada; agora em "${destino}"`);
+      log(`cenário "${nomeCenario(nome)}" apagado; agora em "${nomeCenario(destino)}"`);
     } else {
       await api.versaoDeletarBranch(nome);
       await recarregar();
-      log(`branch "${nome}" apagada`);
+      log(`cenário "${nomeCenario(nome)}" apagado`);
     }
   } catch (err) { log(err.message, true); await renderVer(); }
 }
 async function verDescartar() {
   const g = VER.grafo;
   const n = g && g.pendente ? Object.values(g.pendente).reduce((a, b) => a + b, 0) : 0;
-  if (!confirm(`Reverter ${n} alteração(ões) não commitada(s) em "${g ? g.branch : ""}"?\n`
-    + "Volta ao estado do último commit. Não afeta o histórico.")) return;
-  try { S.estado = (await api.descartarTudo()).estado; render(); await renderVer(); log("alterações pendentes revertidas"); }
+  if (!confirm(`Descartar ${alteracoesTxt(n)} em "${g ? nomeCenario(g.branch) : ""}"?\n`
+    + "Volta ao estado da última versão salva. Não afeta o histórico.")) return;
+  try { S.estado = (await api.descartarTudo()).estado; render(); await renderVer(); log("alterações não salvas descartadas"); }
   catch (err) { log(err.message, true); }
 }
 
@@ -1865,12 +2091,125 @@ function openArquivos() {
   dlg.showModal();
 }
 
+// -- identidade: quem está usando o app (docs/COLABORACAO.md "Identidade e papel de
+// acesso") — matrícula em localStorage (api.js), badge discreto no rail, painel de
+// Configurações (tema + usuário atual + apelido). ------------------------------------
+function renderUsuarioBadge() {
+  const u = S.estado && S.estado.usuario_atual;
+  const dot = $("#rail-user-dot");
+  const btn = $("#rail-config");
+  if (!dot || !btn) return;
+  if (u && u.matricula) {
+    dot.hidden = false;
+    dot.textContent = (u.nome_exibicao || "?").charAt(0).toUpperCase();
+    btn.title = `Configurações — ${u.nome_exibicao} (${u.papel})`;
+  } else {
+    dot.hidden = true;
+    btn.title = "Configurações";
+  }
+}
+
+function usuarioNomeCompleto(pessoa) {
+  return (pessoa.apelido && pessoa.apelido.trim()) || pessoa.nome || pessoa.matricula;
+}
+
+function abrirSeletorUsuario({ bloqueante = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = $("#dlg-usuario");
+    const busca = $("#usr-busca");
+    const lista = $("#usr-lista");
+    const cancelar = $("#usr-cancelar");
+    cancelar.hidden = bloqueante;
+    dlg.querySelector("h3").textContent = bloqueante ? "Quem é você?" : "Trocar usuário";
+
+    const pessoas = (S.estado?.pessoas || []).slice().sort((a, b) => a.nome.localeCompare(b.nome));
+    const pinta = () => {
+      const q = (busca.value || "").trim().toLowerCase();
+      const filtradas = q
+        ? pessoas.filter((p) => p.nome.toLowerCase().includes(q) || String(p.matricula).includes(q))
+        : pessoas;
+      lista.innerHTML = "";
+      if (!filtradas.length) { lista.append(el("div", { className: "sec-empty" }, "ninguém encontrado")); return; }
+      for (const p of filtradas) {
+        const row = el("div", { className: "usr-item" },
+          el("span", {}, usuarioNomeCompleto(p)),
+          el("span", { className: "mat" }, p.matricula));
+        row.onclick = () => { dlg.close(); resolve(p.matricula); };
+        lista.append(row);
+      }
+    };
+    busca.value = "";
+    pinta();
+    busca.oninput = pinta;
+    cancelar.onclick = () => { dlg.close("cancel"); resolve(null); };
+    // sem {once:true} de propósito: no modo bloqueante precisa barrar TODA tentativa de
+    // Esc, não só a 1ª — o dialog só fecha de fato pelo clique numa pessoa da lista. Tira
+    // o listener da chamada anterior antes de pôr o novo (senão acumula — um seletor
+    // bloqueante de antes ficaria barrando Esc pra sempre nas próximas aberturas).
+    if (dlg._cancelHandler) dlg.removeEventListener("cancel", dlg._cancelHandler);
+    dlg._cancelHandler = (ev) => { if (bloqueante) ev.preventDefault(); else resolve(null); };
+    dlg.addEventListener("cancel", dlg._cancelHandler);
+    dlg.showModal();
+    busca.focus();
+  });
+}
+
+async function trocarUsuario(mat) {
+  setAutor(mat);
+  S.estado = await api.estado();
+  render();
+  renderUsuarioBadge();
+}
+
+function abrirConfig() {
+  const dlg = $("#dlg-config");
+  const btnTema = $("#cfg-tema");
+  const refreshTema = () => {
+    btnTema.textContent = "Tema: " + { auto: "automático", light: "claro", dark: "escuro" }[S.theme];
+  };
+  refreshTema();
+  btnTema.onclick = () => { cycleTheme(); refreshTema(); };
+
+  const u = S.estado && S.estado.usuario_atual;
+  const divUsr = $("#cfg-usuario");
+  divUsr.innerHTML = "";
+  const apelidoInp = $("#cfg-apelido");
+  if (u && u.matricula) {
+    divUsr.append(el("b", {}, u.nome_exibicao), el("span", { className: "papel" }, u.papel));
+    const pe = (S.estado.pessoas || []).find((p) => p.matricula === u.matricula);
+    apelidoInp.value = (pe && pe.apelido) || "";
+    apelidoInp.disabled = false;
+  } else {
+    divUsr.append(el("span", { className: "muted" }, "não identificado"));
+    apelidoInp.value = "";
+    apelidoInp.disabled = true;
+  }
+  apelidoInp.onblur = async () => {
+    if (!u || !u.matricula) return;
+    try {
+      S.estado = (await api.editarApelido(u.matricula, apelidoInp.value.trim())).estado;
+      render(); renderUsuarioBadge();
+      log("apelido salvo.");
+    } catch (err) { log(err.message, true); }
+  };
+  apelidoInp.onkeydown = (ev) => { if (ev.key === "Enter") apelidoInp.blur(); };
+
+  $("#cfg-trocar-usuario").onclick = async () => {
+    dlg.close();
+    const mat = await abrirSeletorUsuario({ bloqueante: false });
+    if (mat) await trocarUsuario(mat);
+    abrirConfig();
+  };
+
+  dlg.showModal();
+}
+
 function wire() {
   // ---- rail / sidebar / tema ----
   for (const b of document.querySelectorAll(".rail-btn[data-view]"))
     b.onclick = () => setView(b.dataset.view);
   $("#rail-files").onclick = openArquivos;
-  $("#rail-theme").onclick = cycleTheme;
+  $("#rail-config").onclick = abrirConfig;
   $("#sec-resize").addEventListener("mousedown", startWResize);
 
   // ---- toolbar da Alocação ----
@@ -1975,6 +2314,15 @@ async function boot() {
   try {
     S.estado = await api.estado();
     applyAmbiente(S.estado.ambiente);
+    if (!getAutor()) {
+      // 1ª execução neste navegador: seletor bloqueante — sem matrícula não dá pra
+      // identificar autor de commit nenhum (docs/COLABORACAO.md "Identidade").
+      const mat = await abrirSeletorUsuario({ bloqueante: true });
+      if (mat) {
+        setAutor(mat);
+        S.estado = await api.estado();   // refaz com X-Autor pra vir usuario_atual certo
+      }
+    }
     render();
     if (S.view === "cad") cadLoad(S.cadTab);
     if (S.view === "ver") renderVer();

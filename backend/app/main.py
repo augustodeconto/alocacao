@@ -4,6 +4,7 @@ Local single-user app; one shared SQLite connection guarded by a lock.
 """
 from __future__ import annotations
 
+import contextvars
 import datetime as _dt
 import json as _json
 import os
@@ -51,6 +52,21 @@ _conn.commit()
 
 app = FastAPI(title="Planejamento de Alocação")
 
+# X-Autor da requisição em andamento, disponível pra qualquer função sem precisar
+# enfiar o header no parâmetro de cada endpoint (são dezenas — ver docs/COLABORACAO.md
+# "Identidade e papel de acesso"). contextvar isola corretamente por request mesmo com
+# várias em paralelo (cada uma roda na sua própria task asyncio).
+_AUTOR_ATUAL: contextvars.ContextVar[str | None] = contextvars.ContextVar("autor_atual", default=None)
+
+
+@app.middleware("http")
+async def _capturar_autor(request, call_next):
+    tok = _AUTOR_ATUAL.set((request.headers.get("x-autor") or "").strip() or None)
+    try:
+        return await call_next(request)
+    finally:
+        _AUTOR_ATUAL.reset(tok)
+
 
 def _touch_projeto(projeto_id: int) -> None:
     _conn.execute(
@@ -72,14 +88,58 @@ def _catalogos() -> dict:
 
 # valor_hora / remuneracao ficam no banco (relatório de custo) mas NUNCA vão pro cliente
 _PESSOA_PUB = (
-    "matricula, nome, carga_diaria, capacidade_mensal, ativo, situacao, equipe, area, "
-    "tipo_contrato, inicio_contrato, fim_contrato, formacao, id_filial, inicio_vigencia"
+    "matricula, nome, apelido, papel, carga_diaria, capacidade_mensal, ativo, situacao, "
+    "equipe, area, tipo_contrato, inicio_contrato, fim_contrato, formacao, id_filial, "
+    "inicio_vigencia"
 )
 
 
 def _pessoas() -> list[dict]:
     return [dict(r) for r in _conn.execute(
         f"SELECT {_PESSOA_PUB} FROM pessoa ORDER BY nome")]
+
+
+# -- identidade: quem está por trás de cada requisição (docs/COLABORACAO.md
+# "Identidade e papel de acesso") -------------------------------------------------------
+def nome_exibicao(pessoa: dict | None) -> str:
+    """apelido, senão o primeiro token do nome — usar em todo lugar que hoje mostra
+    autor/pessoa vindo de commit (histórico, badges do grafo, diálogos de merge)."""
+    if not pessoa:
+        return ""
+    ap = (pessoa.get("apelido") or "").strip()
+    if ap:
+        return ap
+    nome = (pessoa.get("nome") or "").strip()
+    return nome.split()[0] if nome else (pessoa.get("matricula") or "")
+
+
+def _pessoa_por_matricula(matricula: str) -> dict | None:
+    r = _conn.execute(
+        "SELECT matricula, nome, apelido, papel FROM pessoa WHERE matricula=?", (matricula,)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def _nomes_exibicao() -> dict[str, str]:
+    """matrícula -> nome_exibicao, pra resolver autor de commit em lote (grafo/diff)."""
+    return {
+        r["matricula"]: nome_exibicao(dict(r))
+        for r in _conn.execute("SELECT matricula, nome, apelido FROM pessoa")
+    }
+
+
+def _usuario_atual(x_autor: str | None = None) -> dict:
+    """{matricula, nome_exibicao, papel} resolvido do X-Autor da requisição (via
+    _AUTOR_ATUAL por padrão; aceita override explícito p/ uso fora de um request). Sem
+    X-Autor ou pessoa desconhecida -> não identificado, papel 'leitura' (o picker
+    ainda não rodou no cliente, ou é uma chamada sem header — trata como o papel
+    menos privilegiado até se identificar)."""
+    mat = (x_autor if x_autor is not None else _AUTOR_ATUAL.get()) or ""
+    mat = mat.strip()
+    pessoa = _pessoa_por_matricula(mat) if mat else None
+    if pessoa:
+        return {"matricula": mat, "nome_exibicao": nome_exibicao(pessoa), "papel": pessoa["papel"]}
+    return {"matricula": None, "nome_exibicao": None, "papel": "leitura"}
 
 
 def _projetos() -> list[dict]:
@@ -121,6 +181,7 @@ def _estado() -> dict:
         "pessoas": _pessoas(),
         "versao": versao.estado_repo(_conn),
         "ambiente": _ambiente(),
+        "usuario_atual": _usuario_atual(),
     }
 
 
@@ -221,7 +282,7 @@ async def importar_upload(arquivos: list[UploadFile] = File(...)):
                 resultados.append({"status": "skipped", "nome": nome,
                                    "detail": "não reconhecido (nem projeto, nem extrato do BI)"})
         if bi_pendentes:
-            resultados.extend(bi_importar(_conn, bi_pendentes))
+            resultados.extend(bi_importar(_conn, bi_pendentes, autor=_AUTOR_ATUAL.get() or ""))
         return {"resultados": resultados, "estado": _estado()}
 
 
@@ -269,7 +330,7 @@ def confirmar_importar_bi():
 
     with _lock:
         try:
-            res = confirmar_importacao(_conn)
+            res = confirmar_importacao(_conn, autor=_AUTOR_ATUAL.get() or "")
         except ValueError as e:
             raise HTTPException(409, str(e))
         return {**res, "estado": _estado()}
@@ -671,7 +732,12 @@ def versao_log(ref: str | None = None, limite: int = 100):
 @app.get("/api/versao/grafo")
 def versao_grafo(limite: int = 1000):
     with _lock:
-        return versao.grafo(_conn, limite)
+        g = versao.grafo(_conn, limite)
+        nomes = _nomes_exibicao()
+        for c in g["commits"]:
+            c["autor_matricula"] = c["autor"]
+            c["autor"] = nomes.get(c["autor"], c["autor"])
+        return g
 
 
 @app.get("/api/versao/diff")
@@ -680,9 +746,14 @@ def versao_diff(de: int | None = None, para: int | None = None):
     (ou HEAD, se para=working)."""
     with _lock:
         try:
-            return versao.diff(_conn, de=de, para=para)
+            d = versao.diff(_conn, de=de, para=para)
         except KeyError as e:
             raise HTTPException(404, f"commit {e} não existe")
+        mat = d["para"].get("autor")
+        if mat:
+            d["para"]["autor_matricula"] = mat
+            d["para"]["autor"] = nome_exibicao(_pessoa_por_matricula(mat)) or mat
+        return d
 
 
 @app.post("/api/versao/commit")
@@ -695,8 +766,9 @@ def versao_commit(payload: dict = Body(...)):
             raise HTTPException(
                 409, f"'{versao.estado_repo(_conn)['branch']}' é protegida — "
                 "salve o trabalho num branch (\"Salvar em um branch…\") e traga por merge")
+        autor = str(payload.get("autor") or "").strip() or (_AUTOR_ATUAL.get() or "")
         try:
-            cid = versao.commit(_conn, msg, autor=str(payload.get("autor") or "").strip())
+            cid = versao.commit(_conn, msg, autor=autor)
         except versao.NadaParaCommitar:
             raise HTTPException(409, "nada para commitar")
         return {"commit_id": cid, "estado": _estado()}
@@ -747,9 +819,10 @@ def versao_deletar_branch(nome: str):
 @app.post("/api/versao/merge")
 def versao_merge(payload: dict = Body(...)):
     origem = str(payload.get("origem") or "").strip()
+    autor = str(payload.get("autor") or "").strip() or (_AUTOR_ATUAL.get() or "")
     with _lock:
         try:
-            res = versao.merge(_conn, origem, autor=str(payload.get("autor") or "").strip())
+            res = versao.merge(_conn, origem, autor=autor)
         except versao.VersaoSuja as e:
             raise HTTPException(409, str(e))
         except versao.MergeEmAndamento as e:
@@ -788,7 +861,7 @@ def versao_concluir_merge(payload: dict = Body(...)):
         try:
             cid = versao.concluir_merge(
                 _conn, str(payload.get("mensagem") or "").strip(),
-                autor=str(payload.get("autor") or "").strip())
+                autor=str(payload.get("autor") or "").strip() or (_AUTOR_ATUAL.get() or ""))
         except ValueError as e:
             raise HTTPException(409, str(e))
         return {"commit_id": cid, "estado": _estado()}
@@ -990,6 +1063,25 @@ def editar_pessoa(matricula: str, payload: dict = Body(...)):
         if sets:
             args.append(matricula)
             _conn.execute(f"UPDATE pessoa SET {', '.join(sets)} WHERE matricula=?", args)
+        _conn.commit()
+        return {"estado": _estado()}
+
+
+@app.put("/api/pessoa/{matricula}/apelido")
+def editar_apelido(matricula: str, payload: dict = Body(...)):
+    """Auto-serviço: cada um edita o próprio apelido (docs/COLABORACAO.md "Apelido —
+    facet de usuário"). Fora do versionamento de propósito — grava direto, não passa
+    por PESSOA_COLS/chg_pessoa. Sem checagem de papel nesta rodada, só um guarda simples
+    pra não editar apelido alheio por engano quando dá pra saber quem está pedindo."""
+    with _lock:
+        matricula = matricula.strip()
+        quem = _AUTOR_ATUAL.get()
+        if quem and quem != matricula:
+            raise HTTPException(403, "só é possível editar o próprio apelido")
+        if not _conn.execute("SELECT 1 FROM pessoa WHERE matricula=?", (matricula,)).fetchone():
+            raise HTTPException(404, "pessoa não encontrada")
+        apelido = (payload.get("apelido") or "").strip() or None
+        _conn.execute("UPDATE pessoa SET apelido=? WHERE matricula=?", (apelido, matricula))
         _conn.commit()
         return {"estado": _estado()}
 

@@ -1,5 +1,17 @@
+// matrícula de quem está usando o app neste navegador (docs/COLABORACAO.md
+// "Identidade e papel de acesso") — escolhida uma vez no seletor de 1ª execução.
+const AUTOR_KEY = "alocacao.autor";
+export const getAutor = () => localStorage.getItem(AUTOR_KEY) || "";
+export const setAutor = (matricula) => localStorage.setItem(AUTOR_KEY, matricula || "");
+
+function _autorHeaders(headers) {
+  const a = getAutor();
+  if (a) headers["X-Autor"] = a;
+  return headers;
+}
+
 async function req(method, url, body) {
-  const opt = { method, headers: {} };
+  const opt = { method, headers: _autorHeaders({}) };
   if (body !== undefined) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
@@ -19,7 +31,7 @@ export const api = {
   _upload: async (url, fileList) => {
     const fd = new FormData();
     for (const f of fileList) fd.append("arquivos", f, f.name);
-    const r = await fetch(url, { method: "POST", body: fd });
+    const r = await fetch(url, { method: "POST", body: fd, headers: _autorHeaders({}) });
     const txt = await r.text();
     let data = null;
     try { data = txt ? JSON.parse(txt) : null; } catch { data = { detail: txt }; }
@@ -65,7 +77,7 @@ export const api = {
   exportarVarios: async (ids, inicio) => {
     const r = await fetch("/api/exportar", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: _autorHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ projeto_ids: ids, inicio: inicio || null }),
     });
     if (!r.ok) {
@@ -87,6 +99,8 @@ export const api = {
   editarMes: (id, periodo, valor) => req("PUT", `/api/alocacao/${id}/mes`, { periodo, valor }),
   editarMesLote: (edits) => req("PUT", "/api/alocacao/mes-lote", { edits }),
   editarPessoa: (matricula, payload) => req("PUT", `/api/pessoa/${encodeURIComponent(matricula)}`, payload),
+  editarApelido: (matricula, apelido) =>
+    req("PUT", `/api/pessoa/${encodeURIComponent(matricula)}/apelido`, { apelido }),
 
   // cadastros (tabelas projeto / pessoa / catálogo)
   cadProjetos: () => req("GET", "/api/cadastro/projetos"),

@@ -31,13 +31,16 @@ def cor_pessoa_mes(
 ) -> dict[tuple[str, str], str]:
     """(matricula, periodo) -> 'vermelho' | 'amarelo'. Ausente = sem cor.
 
-    - total > capacidade                                   -> vermelho
-    - 0 < total < capacidade                               -> amarelo
-    - total == 0, pessoa ATIVA, mês >= mês atual e dentro   -> amarelo
-      do contrato (subalocado dentro do horizonte)
+    Subalocação é mais grave que superalocação pra planejamento de capacidade (recurso
+    ocioso é pior que recurso sobrecarregado) — por isso o vermelho, mais forte, é dela:
+
+    - 0 < total < capacidade                               -> vermelho  (subalocado)
+    - total == 0, pessoa ATIVA, mês >= mês atual e dentro   -> vermelho  (subalocado,
+      do contrato                                                        sem nenhuma hora)
+    - total > capacidade                                   -> amarelo  (superalocado)
     - mês POSTERIOR ao fim do contrato da pessoa            -> sem cor
       (fim_contrato está desatualizado em boa parte da base;
-      não marcamos vermelho pra não gerar falso positivo)
+      não marcamos como subalocado pra não gerar falso positivo)
     - total == capacidade / capacidade desconhecida /       -> sem cor
       mês passado sem horas
     """
@@ -75,17 +78,17 @@ def cor_pessoa_mes(
         if fim and per > fim:
             # Contrato vencido: sem cor. Nem vermelho (fim_contrato desatualizado
             # em boa parte da base -> falso positivo em quem está 100%), nem
-            # amarelo (não se espera alocação após o fim do contrato).
+            # vermelho (não se espera alocação após o fim do contrato).
             continue
         c = pe["capacidade_mensal"]
         if not c:
             continue
         if total > c:
-            out[(mat, per)] = "vermelho"
+            out[(mat, per)] = "amarelo"           # superalocado
         elif 0 < total < c:
-            out[(mat, per)] = "amarelo"
+            out[(mat, per)] = "vermelho"          # subalocado
         elif total == 0 and per >= hoje and ativa(pe):
-            out[(mat, per)] = "amarelo"           # subalocado dentro do horizonte
+            out[(mat, per)] = "vermelho"          # subalocado, sem nenhuma hora
 
     # meses sem nenhuma linha de horas: subalocado se a pessoa está ativa,
     # do mês atual em diante e dentro do contrato
@@ -96,7 +99,7 @@ def cor_pessoa_mes(
         fim = (pe["fim_contrato"] or "").strip() or None
         for per in periodos:
             if per >= hoje and (not fim or per <= fim) and (mat, per) not in totals:
-                out[(mat, per)] = "amarelo"
+                out[(mat, per)] = "vermelho"      # subalocado
     return out
 
 

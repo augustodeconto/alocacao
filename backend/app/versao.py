@@ -24,6 +24,12 @@ PROJETO_COLS = [
     "nome", "empresa", "status", "id_status", "matricula_gp", "id_filial",
     "cenario1", "cenario2", "cenario3", "gestor_projetos",
 ]
+def _nome_cenario(nome: str) -> str:
+    """Nome da branch (técnico) -> nome do cenário na interface, pra mensagens de commit
+    geradas automaticamente (ver docs/TERMINOLOGIA.md)."""
+    return {"main": "Corrente", "BI": "Publicado"}.get(nome, nome)
+
+
 PESSOA_COLS = [
     "nome", "situacao", "equipe", "area", "tipo_contrato", "inicio_contrato",
     "fim_contrato", "formacao", "id_filial", "carga_diaria", "capacidade_mensal",
@@ -464,12 +470,18 @@ def snapshot_cache(conn: sqlite3.Connection) -> dict:
     return _estado_cache(conn)
 
 
-def commitar_estado_bi(conn: sqlite3.Connection, E_bi: dict, mensagem: str) -> dict | None:
+def commitar_estado_bi(conn: sqlite3.Connection, E_bi: dict, mensagem: str, autor: str = "") -> dict | None:
     """Grava `E_bi` (estado-alvo do BI, como dict) como um commit no branch **`BI`**.
     `origem='bi'`, sem 3-way — o BI é a autoridade do que cobre. Se a `main` está
     colada no `BI` (nenhum commit próprio à frente), a `main` faz **fast-forward**
     junto (B-lite: "main e BI equivalentes por hora"). Se a `main` já divergiu, ela
     não se mexe — o usuário traz o BI depois com um merge.
+
+    `autor` é a **pessoa** que disparou a importação (X-Autor da requisição) — hoje a
+    importação é sempre manual, então o autor do commit é sempre um humano, nunca a
+    string fixa 'BI' (isso era um bug: `'BI'` não é uma matrícula, não resolve pra
+    nenhuma pessoa). `SISTEMA` só entra quando existir de fato um caminho de importação
+    automática (docs/COLABORACAO.md "Autor sistema") — não existe ainda.
     Devolve {commit_id, fast_forward} ou None se nada mudou."""
     garantir_bi(conn)
     bi_tip = tip_commit(conn, "BI")
@@ -478,8 +490,8 @@ def commitar_estado_bi(conn: sqlite3.Connection, E_bi: dict, mensagem: str) -> d
         return None
     cid = conn.execute(
         "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
-        "VALUES (?, NULL, 'BI', ?, ?, 'bi')",
-        (bi_tip, mensagem, _now()),
+        "VALUES (?, NULL, ?, ?, ?, 'bi')",
+        (bi_tip, (autor or "").strip() or None, mensagem, _now()),
     ).lastrowid
     _grava_chg(conn, cid, d)
     conn.execute("UPDATE ref_ SET commit_id=? WHERE nome='BI'", (cid,))
@@ -904,7 +916,8 @@ def merge(conn: sqlite3.Connection, origem: str, autor: str = "") -> dict:
     conn.commit()
 
     if not conf:
-        cid = concluir_merge(conn, f"Merge da branch '{origem}'", autor=autor)
+        cid = concluir_merge(
+            conn, f"Incorporar {_nome_cenario(origem)} em {_nome_cenario(h['ref_nome'])}", autor=autor)
         return {"status": "ok", "commit_id": cid}
     return {"status": "conflito", "conflitos": listar_conflitos(conn)}
 
@@ -970,7 +983,7 @@ def concluir_merge(conn: sqlite3.Connection, mensagem: str, autor: str = "") -> 
         "INSERT INTO commit_ (parent_id, merge_parent_id, autor, mensagem, criado_em, origem) "
         "VALUES (?, ?, ?, ?, ?, 'merge')",
         (ours, me["theirs_commit"], autor or None,
-         mensagem or f"Merge da branch '{me['origem']}'", _now()),
+         mensagem or f"Incorporar {_nome_cenario(me['origem'])} em {_nome_cenario(h['ref_nome'])}", _now()),
     ).lastrowid
     _grava_chg(conn, cid, d)
     _cache_set(conn, final, escopo=None)

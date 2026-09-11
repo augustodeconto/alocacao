@@ -23,8 +23,9 @@
     <button id="rail-files" class="rail-btn" title="Arquivos — importar / exportar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5 12 11l2.5 2.5"/></svg>
     </button>
-    <button id="rail-theme" class="rail-btn" title="Tema: automático">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 4v16" fill="currentColor"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
+    <button id="rail-config" class="rail-btn" title="Configurações">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.4M12 18.6V21M4.4 7.2l2 1.2M17.6 15.6l2 1.2M3 12h2.4M18.6 12H21M4.4 16.8l2-1.2M17.6 8.4l2-1.2M7.2 4.4l1.2 2M15.6 17.6l1.2 2M7.2 19.6l1.2-2M15.6 6.4l1.2-2"/></svg>
+      <span id="rail-user-dot" class="rail-user-dot" hidden></span>
     </button>
   </nav>
 
@@ -106,12 +107,12 @@
         <span id="ver-cur" class="ver-cur"></span>
         <span class="tb-sep"></span>
         <div class="tb-group">
-          <button id="ver-commit" title="commitar as alterações pendentes">✔&nbsp;Commit…</button>
-          <button id="ver-branch-novo" title="criar branch a partir do HEAD e trabalhar nela">⑂&nbsp;Nova branch…</button>
-          <button id="ver-merge" title="trazer outra branch para a atual">⇄&nbsp;Merge…</button>
+          <button id="ver-commit" title="Salva uma versão. (commit)">✔&nbsp;Salvar versão…</button>
+          <button id="ver-branch-novo" title="Cria um novo cenário e já passa a trabalhar nele. (branch + switch)">⑂&nbsp;Novo cenário…</button>
+          <button id="ver-merge" title="Incorpora outro cenário ao atual. (merge)">⇄&nbsp;Incorporar…</button>
         </div>
         <span class="tb-sep"></span>
-        <button id="ver-descartar-tudo" title="reverter TODAS as alterações não commitadas — volta ao estado do último commit">↺&nbsp;Reverter pendentes</button>
+        <button id="ver-descartar-tudo" title="Descarta as alterações não salvas. Volta ao estado da última versão salva. (reset)">↺&nbsp;Descartar alterações</button>
         <span class="tb-spacer"></span>
         <span class="status" id="ver-status"></span>
       </div>
@@ -187,8 +188,8 @@
     <section>
       <h4>Importar</h4>
       <p class="muted">
-        <b>Do BI:</b> vira um commit na <code>main</code> — a versão oficial do plano.<br>
-        <b>Planilha de projeto:</b> entra no seu rascunho; você commita quando quiser.
+        <b>Do BI:</b> vira uma versão no Publicado (e a Corrente acompanha, se ainda não tiver versão própria à frente).<br>
+        <b>Planilha de projeto:</b> entra como alteração não salva; você salva uma versão quando quiser.
       </p>
       <button id="arq-import-bi" class="primary">Importar do BI…</button>
       <button id="arq-import-proj">Importar planilha de projeto…</button>
@@ -210,20 +211,54 @@
   <div class="body" id="bi-relatorio-body"></div>
   <div class="actions">
     <button id="bi-relatorio-cancelar" value="cancel">Descartar</button>
-    <button class="primary" id="bi-relatorio-confirmar">Confirmar e commitar</button>
+    <button class="primary" id="bi-relatorio-confirmar">Confirmar e salvar versão</button>
   </div>
 </dialog>
 
 <div id="ver-ctx" class="ver-ctx" hidden></div>
 
 <dialog id="dlg-delbranch">
-  <h3>Apagar branch</h3>
+  <h3>Apagar cenário</h3>
   <div class="body" style="display:block">
     <p id="db-txt" style="margin:0;color:var(--muted);line-height:1.5"></p>
   </div>
   <div class="actions">
     <button value="cancel">Cancelar</button>
     <button class="danger" id="db-ok">Apagar</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-usuario">
+  <h3>Quem é você?</h3>
+  <div class="body" style="display:block">
+    <input id="usr-busca" type="search" placeholder="buscar por nome ou matrícula…" style="width:100%;box-sizing:border-box;margin-bottom:8px;" />
+    <div id="usr-lista" class="usr-lista"></div>
+  </div>
+  <div class="actions">
+    <button value="cancel" id="usr-cancelar">Cancelar</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-config">
+  <h3>Configurações</h3>
+  <div class="body arq cfg-body">
+    <section>
+      <h4>Tema</h4>
+      <button id="cfg-tema" class="mini"></button>
+    </section>
+    <section>
+      <h4>Usuário atual</h4>
+      <div id="cfg-usuario" class="cfg-usuario"></div>
+      <button id="cfg-trocar-usuario" class="mini">Trocar usuário…</button>
+    </section>
+    <section>
+      <h4>Meu apelido</h4>
+      <p class="muted" style="margin:0 0 6px">Como seu nome aparece pros outros (histórico de versões, etc.) — em vez do nome cru vindo do BI.</p>
+      <input id="cfg-apelido" type="text" placeholder="ex.: Augusto" style="width:100%;box-sizing:border-box;" />
+    </section>
+  </div>
+  <div class="actions">
+    <button value="cancel">Fechar</button>
   </div>
 </dialog>
 

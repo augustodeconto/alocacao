@@ -200,15 +200,22 @@ Histórico de versões
 
 ## 15. Alterações não versionadas
 
-O estado equivalente a "working tree modificado" é **Alterações pendentes** — alterações
-realizadas desde a última versão salva. Evitar "working tree dirty"/"uncommitted changes"
-na interface comum.
+O estado equivalente a "working tree modificado" é **Alterações não salvas** (revisado em
+2026-09-11 — era "Alterações pendentes"; "não salvas" comunica melhor que existe uma ação
+pendente de salvar, não uma aprovação pendente) — alterações realizadas desde a última
+versão salva. Evitar "working tree dirty"/"uncommitted changes" na interface comum.
+
+Quando o texto tem uma contagem, o número vem primeiro e concorda em número/gênero, sem
+parênteses: **"1 alteração não salva"**, **"3 alterações não salvas"** — nunca "alterações
+não salvas (3)".
 
 ## 16. Descartar
 
-`reset`/`discard` é **Descartar alterações**. Parcial: "Descartar alterações deste
-projeto". Global: "Descartar todas as alterações pendentes". A interface pede confirmação
-quando há perda de dados de trabalho.
+`reset`/`discard` é **Descartar alterações**. Texto simples, sem "TODAS" em caixa alta —
+maiúscula-gritando não é ênfase, é ruído. Parcial: "Descartar alterações deste projeto".
+Global: "Descartar alterações" (o alvo — "todas as pendentes" — fica na explicação/tooltip,
+não no rótulo do botão: ex. "Descarta as alterações não salvas. Volta ao estado da última
+versão salva."). A interface pede confirmação quando há perda de dados de trabalho.
 
 ## 17. Conflitos
 
@@ -241,16 +248,30 @@ específica, preferir verbo explícito: "Atualizar dados", "Atualizar do sistema
 | `merge` | Incorporar cenário |
 | merge conflict | Conflito de alterações |
 | `log` | Histórico de versões |
-| dirty working state | Alterações pendentes |
+| dirty working state | Alterações não salvas |
 | discard/reset | Descartar alterações |
 | refresh | Atualizar |
 
 ## 20. Uso dos termos Git
 
 Não remover a terminologia Git do sistema técnico — continua em código, nomes internos,
-documentação técnica, logs, API interna. Na interface, aparece de forma secundária:
-"Salvar versão (commit)", "Criar cenário — branch", "Incorporar cenário — merge",
-preferencialmente em tooltip, para não poluir visualmente a interface.
+documentação técnica, logs, API interna. **E também não some da interface**: o termo Git
+some do rótulo do botão (texto grande, sempre visível), mas continua presente e visível no
+tooltip (o texto que aparece ao passar o mouse), entre parênteses, no final da frase — quem
+já usa Git reconhece de cara; quem não usa, ignora e segue com a explicação em português.
+
+Exemplos canônicos (toolbar da tela Versões — `frontend/index.html`):
+
+| Botão | Tooltip |
+|---|---|
+| Salvar versão… | Salva uma versão. (commit) |
+| Novo cenário… | Cria um novo cenário e já passa a trabalhar nele. (branch + switch) |
+| Incorporar… | Incorpora outro cenário ao atual. (merge) |
+| Descartar alterações | Descarta as alterações não salvas. Volta ao estado da última versão salva. (reset) |
+
+Regra de redação do tooltip: frase(s) curta(s) em português comum, sem CAIXA ALTA pra dar
+ênfase (isso lê como grito, não como destaque), terminando com o comando Git equivalente
+entre parênteses.
 
 ## 21. Regra de implementação
 
@@ -266,7 +287,7 @@ houver risco elevado de regressão — a migração pode ser gradual. Prioridade
 
 A especificação viva (`docs/ESPECIFICACAO.md`, seção Vocabulário) registra explicitamente
 pelo menos: Pessoa, Recurso, Usuário, Equipe, Tipo de alocação, Alocação, Corrente,
-Publicado, Cenário, Versão, Alterações pendentes, Incorporar cenário. Não introduzir novos
+Publicado, Cenário, Versão, Alterações não salvas, Incorporar cenário. Não introduzir novos
 termos concorrentes sem necessidade.
 
 ## 23. Princípio final

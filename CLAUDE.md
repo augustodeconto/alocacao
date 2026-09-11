@@ -58,6 +58,16 @@ On startup: `db.init_db()` runs the idempotent `SCHEMA`, then `_migrate()` (idem
 `ALTER`s + one-time data migrations gated by `PRAGMA user_version`), then
 `_backfill_baseline()` guarantees every project has a baseline snapshot.
 
+**Identity** (`docs/COLABORACAO.md` "Identidade e papel de acesso"): the client sends
+`X-Autor: <matricula>` on every request (`frontend/js/api.js`, localStorage
+`alocacao.autor`); an `@app.middleware("http")` captures it once per request into
+`_AUTOR_ATUAL` (`contextvars.ContextVar`), so any function mid-request can read it without
+threading it through every endpoint's parameters — `_estado()` uses this to attach
+`usuario_atual` to every `/api/estado`-shaped response. `pessoa.papel`/`pessoa.apelido`
+are deliberately outside versioning (not in `PESSOA_COLS`, no `chg_pessoa` rows) — they
+write straight to the table like `preferencias`. Permission enforcement (the actual
+role matrix) is **not** implemented yet — only identity resolution and display.
+
 `backend/app/cadastros.py` is a separate `APIRouter` (projeto / pessoa / catalogo CRUD)
 mounted into `main.py`; kept out of the main editor UI deliberately.
 
@@ -152,5 +162,10 @@ epoch 1899-12-30 (`serial_to_date` / `date_to_serial`).
 3-level tree (projeto → `tipo_alocacao` group → pessoa), `por_recurso` is pessoa →
 project/tipo, each with totals, `totais_base` / `totais_alterado` for diff markers, and the
 divergence colors. `cor_pessoa_mes` sums a person's hours across **all** projects for a
-month: red if over `capacidade_mensal` or hours land after `fim_contrato`; yellow if under.
-Percent is never persisted — always `round(horas / capacidade_mensal * 100)`.
+month: **red if under** `capacidade_mensal` (or zero within the active-contract horizon),
+**yellow if over** — under-allocation is treated as more severe than over-allocation for
+capacity planning (idle resource > overloaded resource). No color once the month is past
+`fim_contrato` (avoids false positives from stale contract-end data). The grid shows this as
+a small icon (gauge = over/yellow, clock = under/red) to the left of the cell's number, not
+a full-cell background fill. Percent is never persisted — always
+`round(horas / capacidade_mensal * 100)`.

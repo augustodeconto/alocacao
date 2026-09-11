@@ -76,8 +76,8 @@ parênteses/tooltip, se útil):
 | Incorporar cenário | merge |
 | Conflito de alterações / Resolver conflito | merge conflict |
 | Histórico de versões | log |
-| Alterações pendentes | working tree sujo / uncommitted |
-| Descartar alterações (deste projeto / pendentes) | reset/discard |
+| Alterações não salvas | working tree sujo / uncommitted |
+| Descartar alterações (deste projeto / global) | reset/discard |
 | Atualizar | refresh |
 
 Tabela completa e regras de uso em `docs/TERMINOLOGIA.md` §19.
@@ -509,19 +509,181 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 - Edição/CRUD da aba `Novos_Pesquisadores` na interface (form dedicado) — escopo do v1?
 - Exibir/editar anotações na grade (ícone de nota) — v1 ou depois?
 - Comportamento ao remover um projeto do banco (confirmar, mover arquivo, etc.).
+- **Sem infra de teste de frontend.** `frontend/js/*.js` (grade, grafo de versões, import
+  do BI) não tem nenhuma cobertura automatizada — só `pytest` no backend. Lógica pura sem
+  DOM (ex. `layoutGrafo` em `main.js`) já seria testável isoladamente, mas falta o runner:
+  este ambiente de desenvolvimento não tem Node.js instalado (só `nodejs` 12 disponível via
+  `apt`, não instalado). Ficou pendente decidir se vale montar essa infra (`node --test` ou
+  equivalente) para um app single-user deste porte.
+- **Painel lateral: toggle pra travar a troca automática.** Hoje o painel sempre segue o
+  último clique nas grades (projeto → custo, pessoa → resumo). O usuário quer um botão
+  discreto pra desligar esse acompanhamento automático — inclusive de forma assimétrica
+  (ex.: segue projeto, mas trava em pessoa uma vez aberta). Não implementado ainda.
 
 ## Histórico de mudanças
 
+- **2026-09-11** — **Identidade + papel + apelido chegam em todo o sistema**
+  (`docs/COLABORACAO.md` "Identidade e papel de acesso" + "Plano de implementação").
+  Escopo: identidade "chega" em tudo — **não** inclui aplicar a matriz de permissão de
+  verdade (isso é o próximo passo). `pessoa.papel` (default `'leitura'`) e
+  `pessoa.apelido` novos, de propósito **fora do versionamento** (fora de
+  `PESSOA_COLS`/`chg_pessoa`/`base_pessoa` — gravam direto, como `preferencias`); pessoa
+  `SISTEMA` (papel `admin`) criada uma vez na migração, reservada pro dia em que a
+  importação for automática (não é hoje). Backend: `nome_exibicao(pessoa)` = apelido, senão
+  1º token do nome — usado em todo autor de commit exibido (grafo, diff); `/api/estado`
+  ganha `usuario_atual {matricula, nome_exibicao, papel}` resolvido do `X-Autor`; novo
+  `PUT /api/pessoa/{matricula}/apelido` (self-service, 403 se tentar editar apelido
+  alheio). **Corrigido um bug real**: `bi_import.py`/`versao.commitar_estado_bi` gravavam
+  `autor='BI'` fixo (string, não uma pessoa) — agora usam quem disparou o upload de
+  verdade (a importação continua sempre manual; `SISTEMA` só entra quando existir
+  importação automática). `X-Autor` capturado **uma vez por requisição** via middleware +
+  `contextvars.ContextVar` (`_AUTOR_ATUAL`) em vez de parâmetro em cada rota — evita tocar
+  nas ~30 rotas que devolvem `_estado()`. Frontend: `api.js` manda `X-Autor` em toda
+  chamada (isso nunca tinha sido ligado no cliente); seletor bloqueante de pessoa na 1ª
+  execução (`localStorage` `alocacao.autor`); ícone de tema do rail virou uma
+  **engrenagem** (Configurações: tema + usuário atual + "Trocar usuário" + campo de
+  apelido), com um badge discreto (inicial do nome) sempre visível no rail. Testes novos
+  em `backend/tests/test_identidade.py` (7): migração idempotente, papel/apelido fora do
+  diff, `usuario_atual` reflete `X-Autor`, apelido alheio recusado, autoria do BI é quem
+  importou.
+- **2026-09-11** — **Ícones de sub/superalocação: maiores, no canto superior-esquerdo,
+  velocímetro trocado por despertador.** Segunda rodada de feedback sobre o item anterior:
+  o velocímetro não ficou legível pequeno e o par inteiro estava pequeno demais pra
+  perceber de relance. `.sev-icon` foi de 8×12px inline (antes do número, empurrando o
+  texto) pra 14×14px **posicionado absoluto** no quadrante superior-esquerdo da célula
+  (`position:absolute; top:1px; left:2px`, `td.month` virou `position:relative` pra ser a
+  referência) — não interfere mais no alinhamento do número. Ícone de superalocação
+  redesenhado: era velocímetro, virou **despertador tocando** (sininhos no topo + ponteiros
+  bem abertos), pra ficar na mesma família visual do relógio parado da subalocação (mesmo
+  círculo+ponteiros) só que claramente "em alarme" — mais fácil de reconhecer o par de
+  relance do que dois ícones de famílias diferentes.
+- **2026-09-11** — **Sub/superalocação: gravidade invertida + ícone no lugar de pintar a
+  célula.** Dois pedidos do usuário sobre a marcação de divergência da grade: (1) a
+  severidade estava invertida pro objetivo de planejamento de capacidade — subalocação
+  (recurso ocioso) é mais grave que superalocação (recurso sobrecarregado), então o
+  vermelho (mais forte) passa a ser da subalocação, e o amarelo da superalocação. Corrigido
+  na origem, `aggregate.cor_pessoa_mes` (backend/app/aggregate.py) — os 3 branches que
+  decidiam "vermelho"/"amarelo" trocaram de rótulo; tudo que consome essas strings
+  (`colorClassFor` em main.js, `CUSTO_COR_PESSOA` no resumo de pessoa) seguiu
+  automaticamente, sem precisar mexer em mais nada além do ponto de origem. Teste
+  `test_cor_sobre_e_subalocacao` ajustado. (2) A célula não pinta mais o fundo inteiro de
+  vermelho/amarelo — um ícone pequeno (SVG à mão, ~8×12px, alongado verticalmente) aparece
+  à esquerda do número grande: um relógio pra subalocação (vermelho — tempo ocioso) e um
+  velocímetro com o ponteiro passando do limite pra superalocação (amarelo). Ícones
+  escolhidos depois de descartar alternativas — barrinhas+linha de meta, pessoa carregando
+  peso — por não caberem legíveis no espaço minúsculo disponível. `--sev-amarelo` novo token
+  de cor (claro/escuro); vermelho reaproveita `--err`. `td.cell.over`/`.under` e
+  `td.total.over`/`.under` perderam o `background` — ficam só como gancho semântico na
+  célula, sem estilo próprio.
+- **2026-09-11** — **Correções no gráfico de área do resumo de pessoa** (feedback direto
+  em cima da versão anterior do mesmo dia): (1) o gráfico e a legenda listavam **todo**
+  projeto em que a pessoa já teve alguma alocação (`rec.filhos`, histórico completo), mesmo
+  sem nenhuma hora no período mostrado (mês atual em diante) — projetos encerrados/"Férias"
+  apareciam na legenda sem nunca aparecer no gráfico; agora ambos usam a mesma lista, já
+  filtrada por `soma > 0` no período visível; (2) como efeito colateral disso, duas cores se
+  repetiam quando havia mais projetos do que cores na paleta (`CUSTO_CORES` tem 6) — some
+  sozinho ao filtrar, já que sobra pouca coisa na prática; (3) adicionado eixo Y (`0` /
+  metade / topo — topo = capacidade mensal em horas, ou 100% no modo percentual), com as
+  marcas deslocadas pra fora do gráfico (`.sec-area-wrap`/`.sec-area-y`) em vez de só uma
+  linha pontilhada solta sem rótulo.
+- **2026-09-11** — **Resumo de pessoa: gráfico de área, prioridade pessoa > projeto,
+  auto-expandir tipo, contrato vencido.** Iteração sobre o painel lateral do dia:
+  (1) clicar na linha de topo de um projeto (Por Projeto) já expande os grupos de tipo de
+  alocação dele (`S.open` ganha as chaves `g:<projeto>:<tipo>` na hora, sem precisar de um
+  segundo clique no `▸`); (2) **pessoa manda mais que projeto** na hora de decidir o que o
+  painel lateral mostra — clicar numa linha de alocação (pessoa dentro de um projeto, em
+  qualquer uma das duas grades) abre o resumo da pessoa, não o custo do projeto; só a linha
+  de topo do projeto (sem pessoa nenhuma) abre custo (antes era o contrário: qualquer linha
+  com projeto resolvível ganhava do resumo de pessoa); (3) o resumo de pessoa trocou a lista
+  de barras por um **gráfico de área empilhado** (uma camada por projeto, SVG à mão, mesma
+  paleta `CUSTO_CORES` do painel de custo) com legenda, alternando horas/% conforme o botão
+  "Exibir" da toolbar (`S.displayUnit`) — igual à grade principal; "Principais projetos"
+  (sempre em horas) fica logo abaixo do gráfico+legenda; por último, "Alocação mês a mês"
+  mostra as duas unidades juntas (horas grande, % pequeno do lado); (4) `pessoa.fim_contrato`
+  aparece na ficha, e fica em vermelho quando já passou da data de hoje.
+- **2026-09-11** — **Corrige filtro de GP vazio (dados vindos do BI) e reforça o
+  scroll automático pro mês atual.** (1) O filtro de GP (`gp-filter`) era ancorado em
+  `projeto.matricula_gp`, mas a importação do BI só preenche `gestor_projetos` (nome livre)
+  — nunca a matrícula (`_BI_PROJETO_FIELDS` não inclui `matricula_gp`; só o import de
+  planilha por projeto ou edição manual/cadastro grava isso). Resultado: pra qualquer banco
+  cuja origem principal seja o BI (praticamente todos, hoje), o dropdown só mostrava "Todos
+  os GPs" e "— sem GP —" — nenhum GP de verdade, mesmo com o nome já aparecendo nas linhas
+  da grade. Corrigido em `frontend/js/main.js` (`gpDe`/`gpNome`/`refreshGpFilter`): a chave
+  do filtro agora cai pro nome (`gestor_projetos`, prefixo interno `"nome:"` pra não colidir
+  com uma matrícula) quando não há matrícula conhecida. Limitação aceita: se o mesmo GP
+  tiver alguns projetos com matrícula e outros só com nome, aparecem como duas entradas
+  separadas no filtro — não há hoje um cruzamento nome→matrícula confiável pra unificar.
+  (2) `scrollToCurrentMonth()` (rola as duas grades pro mês atual ao carregar) reforçado com
+  2 frames de `requestAnimationFrame` + um reforço via `setTimeout(80ms)`, porque em pelo
+  menos um caso reportado pelo usuário o scroll não "colava" após 1 frame só (não foi
+  possível confirmar a causa exata sem ferramenta de browser neste ambiente — é uma correção
+  defensiva, não uma causa-raiz confirmada; **pedir pro usuário confirmar** que resolveu).
+
+- **2026-09-11** — **Painel lateral ganha resumo de pessoa; custo mostra valor no
+  centavo.** O painel à direita (antes só "Custo do projeto") agora responde ao que foi
+  clicado por último em qualquer uma das duas grades: clicar num projeto mostra o custo
+  (como antes); clicar numa pessoa (linha de topo da grade Por Recurso, ou qualquer linha
+  de alocação — que também identifica a pessoa) mostra um **resumo da pessoa**: nome, ficha
+  (vínculo/carga diária/capacidade mensal/fim de contrato, de `pessoa`), alocação mês a mês
+  a partir do mês atual (cor vermelho/amarelo reaproveitada de `cor_pessoa_mes`) e os
+  principais projetos em que está alocada. **Resumo de pessoa nunca mostra custo** — só
+  alocação (`_PESSOA_PUB` já exclui `valor_hora`/`remuneracao` do `/api/estado`, então o
+  dado nem chega ao cliente). Implementado em `frontend/js/main.js`
+  (`renderResumoPessoa`, `openResumoPessoa`, `S.secModo`) + CSS novo em `styles.css`. Sem
+  alteração de schema/API — usa dados que `/api/estado` já entrega
+  (`grade.por_recurso`, `pessoas`). **Fora do escopo agora** (a pedido do usuário): botão
+  pra desabilitar a troca automática de conteúdo do painel ao alternar seleção entre
+  projeto/pessoa — fica pra depois.
+  Também: a tabela "Custo por mês" (e o novo total ao lado do título) passou a mostrar o
+  valor **completo, no centavo** (`_brlFull`, `Intl`/`toLocaleString` com `currency: "BRL"`)
+  — só o KPI grande no topo continua abreviado (ex. "R$ 64 k"), com o valor exato no
+  `title` (tooltip). O rótulo desse KPI também foi trocado de "Total (daqui pra frente)"
+  pra **"Total (mês atual em diante)"** — mais formal.
+- **2026-09-11** — **Ajuste fino da terminologia da tela Versões**, a pedido direto do
+  usuário (revisão sobre a diretiva anterior deste mesmo dia): (1) "Alterações pendentes" →
+  **"Alterações não salvas"** (`docs/TERMINOLOGIA.md` §15, §19, §22 atualizados) — "pendente"
+  soava como algo esperando aprovação, não uma ação de salvar que falta fazer; (2) contagem
+  vem primeiro e concorda em número/gênero, sem parênteses — **"1 alteração não salva"** em
+  vez de "alterações não salvas (1)"; (3) os termos Git **não desaparecem da interface** —
+  continuam nos tooltips dos botões da toolbar, entre parênteses, no fim da frase: "Salva uma
+  versão. (commit)", "Cria um novo cenário e já passa a trabalhar nele. (branch + switch)",
+  "Incorpora outro cenário ao atual. (merge)", "Descarta as alterações não salvas. Volta ao
+  estado da última versão salva. (reset)" — exemplos canônicos em `docs/TERMINOLOGIA.md` §20;
+  (4) tirado o "TODAS" em caixa alta do tooltip de descarte global (lido como grito, não
+  como ênfase) e o botão perdeu o "pendentes" do rótulo (agora só "Descartar alterações" —
+  o alvo fica no tooltip); (5) o prompt de "Novo cenário" perdeu a explicação parentética
+  ("a partir daqui, leva as pendências junto") — ficou só "Nome do cenário novo:";
+  (6) as **mensagens automáticas de commit** (`backend/app/versao.py` e `bi_import.py`, não
+  só rótulo de UI) também passaram a usar Corrente/Publicado/incorporar em vez de
+  main/BI/merge cru: import do BI grava mensagem "Importação do Publicado em AAAA-MM-DD"
+  (era "Importação BI ..."); merge sem conflito grava "Incorporar <origem> em <destino>" já
+  traduzidos (era "Merge da branch 'X'"). Novo helper `_nome_cenario()` em `versao.py`,
+  espelho do `nomeCenario()` do frontend.
+- **2026-09-11** — **Corrige desenho do grafo de Versões** (`layoutGrafo`/`paintVer` em
+  `frontend/js/main.js`). Dois bugs na raia que só "passa de raspão" por uma linha sem ser
+  o commit dela: (1) convergia visualmente com outra raia assim que as duas passavam a
+  apontar pro mesmo commit-alvo (`botLanes.indexOf`), fundindo as linhas um commit **antes**
+  da hora, em vez de na linha do commit-alvo de fato; (2) o trecho que chega no nó de
+  convergência usava a cor da raia de **destino**, não da raia de **origem**, fazendo a
+  linha "trocar de cor" bem no ponto de fusão. Sintoma relatado: um fast-forward que criou
+  dois commits irmãos (`origem='bi'`) parecia, na tela, uma sequência linear/bugada em vez
+  de um garfo curto que se fecha de novo. Sem teste automatizado — `layoutGrafo` é lógica
+  pura (sem DOM), testável isoladamente, mas o projeto não tem nenhuma infra de teste de
+  frontend (sem Node.js neste ambiente; ver item em "Itens em aberto"). Verificado por
+  simulação manual do algoritmo (Python replicando a lógica) comparada ao grafo real do
+  banco, não por suíte automatizada.
 - **2026-09-11** — **Diretiva de terminologia da interface** ([`docs/TERMINOLOGIA.md`](TERMINOLOGIA.md)).
   Formaliza o vocabulário canônico (Pessoa/Recurso/Colaborador/Usuário/Equipe/Tipo de
   alocação, já alinhado com §1-A) **e** a tradução da camada de versionamento Git-like para
   linguagem de gerente de projeto: commit→**Versão** (ação: Salvar versão), branch do
   usuário→**Cenário**, `main`→**Corrente**, branch `BI`→**Publicado**, checkout→**Abrir
   cenário**, merge→**Incorporar cenário**, merge conflict→**Conflito de alterações**,
-  log→**Histórico de versões**, working sujo→**Alterações pendentes**, reset→**Descartar
+  log→**Histórico de versões**, working sujo→**Alterações não salvas**, reset→**Descartar
   alterações**, refresh→**Atualizar**. Termos técnicos (`main`, `commit`, `branch`, nomes
   internos/API) continuam como estão — só a UI muda; termo Git pode aparecer secundário em
-  tooltip/parênteses. Mudança de UI (tela Versões) fica a cargo da outra sessão.
+  tooltip/parênteses. Aplicado em `index.html`/`main.js` (tela Versões, diálogo Arquivos,
+  grade de projeto) nesta mesma data — sem teste automatizado (é troca de texto; o projeto
+  não tem infra de teste de frontend, ver item em "Itens em aberto").
 - **2026-09-10** — **Vocabulário canônico + fim da colisão `tipo_alocacao`/"equipe".**
   Nova seção §1-A define Pessoa, Colaborador, Recurso, Membro de equipe/projeto, Usuário,
   Nome e Equipe como facetas/conceitos distintos, não sinônimos. Corrigida a colisão real

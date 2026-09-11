@@ -10,12 +10,12 @@ def test_cor_sobre_e_subalocacao(conn, sample_path):
 
     conn.execute("UPDATE pessoa SET capacidade_mensal=88 WHERE matricula='73920'")
     cores = cor_pessoa_mes(conn)
-    assert cores[("73920", "2026-06-01")] == "amarelo"   # 52 < 88
+    assert cores[("73920", "2026-06-01")] == "vermelho"  # 52 < 88 (subalocado)
     assert ("73920", "2026-07-01") not in cores           # 88 == 88
     assert ("73920", "2026-05-01") not in cores           # 0 -> sem cor
 
     conn.execute("UPDATE pessoa SET capacidade_mensal=40 WHERE matricula='73920'")
-    assert cor_pessoa_mes(conn)[("73920", "2026-07-01")] == "vermelho"  # 88 > 40
+    assert cor_pessoa_mes(conn)[("73920", "2026-07-01")] == "amarelo"   # 88 > 40 (superalocado)
 
 
 def test_grade_agrupada_por_tipo(conn, sample_path):

@@ -12,6 +12,11 @@
 > **Pendente:** frontend (rascunho no cliente + autossave + seletor de branch/rascunho),
 > aposentar os endpoints de edição de célula, remover `head_`, revisar export/cache
 > (itens 5–7 da ordem de implementação).
+>
+> **2026-09-11 — identidade/papel de acesso decididos** (ver seção própria abaixo),
+> **nada implementado ainda**: substitui a tabela `usuario` daqui por `pessoa` + campo
+> `pessoa.papel` (fora do versionamento); matriz de 4 papéis; resolve o item 3 de "Em
+> aberto" (Corrente protegida = sim).
 
 ## Problema
 
@@ -151,6 +156,180 @@ Fase 2 junta branch↔branch.
   (Revisar em detalhe na implementação.)
 - **`/api/estado`** ganha `usuario` atual + lista de `ref_` + o rascunho do autor.
 
+## Identidade e papel de acesso (2026-09-11) — substitui `usuario` deste doc
+
+> Decisões fechadas numa sessão de arquitetura separada, ainda **não implementadas**
+> (nenhuma linha de código escrita). Endereça um problema diferente do resto deste
+> documento: **quem é a pessoa e o que ela pode fazer**, não a edição concorrente
+> (rascunho/autosave/4-níveis, que continua como descrito acima e segue pendente).
+
+A tabela `usuario(nome PK, ...)` proposta na seção anterior está **substituída**: não existe
+lista de identidade separada. Todo `pessoa` cadastrado é um usuário em potencial. Quando o
+`rascunho` for implementado, `rascunho.autor` e `commit_.autor` passam a referenciar
+`pessoa.matricula` (não `usuario.nome`) — é a única mudança de fato no desenho de rascunho
+acima; o resto (edit-set, 4 níveis, autosave) não muda.
+
+### Identidade — como é gravada
+- Cliente guarda só a **matrícula** em `localStorage` (chave tipo `alocacao.autor`).
+  Escolhida uma vez, num seletor simples (lista de `pessoa`); só muda depois via um menu
+  escondido nas configurações — não repergunta a cada carga.
+- **Sem auto-detecção do usuário do sistema operacional no v1** — o navegador não expõe
+  essa informação; Kerberos/`REMOTE_USER` fica como possibilidade futura, não agora.
+- Cada requisição mutante manda a matrícula em `X-Autor` (mecanismo já existe). Grava em
+  `commit_.autor` / `rascunho.autor` — sempre matrícula, nunca nome livre.
+
+### Papel — `pessoa.papel`, fora do versionamento
+`pessoa.papel TEXT NOT NULL DEFAULT 'leitura'`, valores `leitura | gp | coordenador |
+admin`. **Decisão definitiva: fica fora do sistema de versionamento** — não entra em
+`PESSOA_COLS` (`versao.py`), não gera linha em `chg_pessoa`, não passa por `base_pessoa`,
+não é afetado por commit/checkout/merge/descartar. Grava direto na tabela, como
+`preferencias`. Motivo: controle de acesso precisa ser imediato — promover alguém não pode
+ficar pendente de commit nem virar conflito de merge entre branches.
+
+### Matriz de permissão
+
+| papel | edita alocações/projetos | custo totalizado (projeto/mês) | custo individual (valor_hora/remuneração) | incorporar → Corrente (merge main) | promove usuário |
+|---|---|---|---|---|---|
+| leitura | não | não | não | — | não |
+| gp | sim | sim | não | não (só cenário↔cenário) | não |
+| coordenador | sim | sim | sim (vê e edita) | sim (aprova) | não |
+| admin | sim | sim | sim | sim | sim — inclusive promove outro admin |
+
+`admin` é superset de `coordenador`. Isso também fecha o item 3 de "Em aberto" abaixo:
+**Corrente (`main`) fica protegida** — incorporar exige `coordenador`/`admin`.
+
+### Superfície de enforcement (nada implementado ainda)
+1. Toda rota mutante (alocação, projeto, pessoa, commit/branch/merge/descartar) bloqueada
+   pra `leitura`.
+2. `_PESSOA_PUB` (`main.py`) — hoje esconde `valor_hora`/`remuneracao` de todo mundo em
+   `/api/estado`; vira condicional por papel.
+3. `cadastros.py` `editar_pessoa` — editar custo individual só `coordenador`/`admin`.
+4. Endpoint de custo por projeto (`GET /api/custo/projeto`) bloqueado pra `leitura`.
+5. `versao.merge`/commit pra `main` (Corrente) — gate por papel, além da proteção de branch
+   que já existe.
+6. Enforcement **precisa ser server-side** — `X-Autor` é auto-declarado/falsificável;
+   esconder elemento na UI é só cosmético.
+
+### Apelido — facet de usuário, não de cadastro
+
+`pessoa.apelido TEXT` (opcional). Conceitualmente é um atributo do **usuário** (como
+`papel`), não do cadastro da pessoa — por isso, mesma regra do `papel`: **fica fora do
+versionamento** (fora de `PESSOA_COLS`/`chg_pessoa`/`base_pessoa`, grava direto). Existe
+fisicamente na tabela `pessoa` só porque não há tabela `usuario` separada (ver acima); o
+que importa é o tratamento (fora do diff/commit), não onde a coluna mora.
+
+Resolve o problema de exibição: `pessoa.nome` vem sujo do BI (maiúsculas inconsistentes) e
+**não vai ser corrigido agora** (a correção certa é higienizar o dado importado, fora de
+escopo aqui). Função de exibição — usar em **todo lugar que hoje mostraria autor/pessoa**
+(commit, badge de usuário conectado, git-graph, diálogos):
+
+```
+nome_exibicao(pessoa) = pessoa.apelido, se definido, senão primeiro token de pessoa.nome
+```
+
+Cada um edita o próprio apelido (self-service, na tela de Configurações — ver abaixo). Não
+precisa de UI de admin editando apelido alheio nesta rodada.
+
+### Autor "sistema"
+
+Reservar uma **pessoa** com matrícula fixa `SISTEMA` (não numérica — não colide com
+matrícula real vinda do BI), `nome='Sistema'`, `apelido='Sistema'`, `papel='admin'`.
+Criada uma vez na migração, se não existir. Não é caso especial em lugar nenhum do código —
+é só mais uma matrícula possível em `commit_.autor`.
+
+**Uso imediato:** nenhum — hoje a importação (BI e planilha de projeto) é sempre disparada
+manualmente por uma pessoa logada. O autor do commit gerado pela importação deve ser
+**essa pessoa** (via `X-Autor` da requisição), não mais a string fixa `'BI'` que
+`bi_import.py` grava hoje — esse é um bug a corrigir nesta implementação (ver plano
+abaixo).
+
+**Uso futuro:** quando a importação passar a ser automática (conectada direto no banco de
+origem, sem alguém clicar em "importar"), o autor desses commits passa a ser `SISTEMA`.
+Não implementar a automação agora — só deixar a pessoa `SISTEMA` pronta pra esse dia.
+
+## Plano de implementação — identidade, papel, apelido
+
+> Escopo desta rodada: fazer a identidade "chegar" em todo o sistema (backend resolve
+> quem está por trás de cada requisição; frontend sabe e mostra quem é o usuário atual e
+> seu papel). **Não** inclui aplicar o enforcement da matriz de permissão (bloquear
+> edição/custo por papel) — isso é o próximo passo, depois que esta base estiver no ar.
+
+> **Status (2026-09-11): implementado**, itens 1-6 abaixo. Detalhe de uma escolha de
+> implementação não antecipada no plano: em vez de enfiar `X-Autor` como parâmetro em
+> cada uma das ~30 rotas mutantes, o backend captura o header **uma vez por requisição**
+> num middleware (`_AUTOR_ATUAL`, `contextvars.ContextVar` em `main.py`) — qualquer
+> função no meio de uma requisição lê `_AUTOR_ATUAL.get()` sem precisar receber o header
+> no parâmetro. `_estado()` (chamado de ~28 endpoints diferentes) usa isso pra sempre
+> devolver `usuario_atual` correto, sem precisar tocar em cada um deles.
+
+### 1. Schema (`backend/app/db.py`)
+- `ALTER TABLE pessoa ADD COLUMN papel TEXT NOT NULL DEFAULT 'leitura'` (idempotente em
+  `_migrate`).
+- `ALTER TABLE pessoa ADD COLUMN apelido TEXT` (idempotente).
+- **Nem `papel` nem `apelido` entram em `PROJETO_COLS`/`PESSOA_COLS`** (`versao.py`) —
+  ficam de fora de `chg_pessoa`/`base_pessoa` de propósito.
+- Migração idempotente: `INSERT OR IGNORE INTO pessoa (matricula, nome, apelido, papel)
+  VALUES ('SISTEMA', 'Sistema', 'Sistema', 'admin')`.
+
+### 2. Backend — resolução de identidade
+- Helper `nome_exibicao(pessoa_row) -> str` (apelido ou primeiro token do nome) — um lugar
+  só, reusado em toda serialização que hoje mostra autor.
+- `/api/estado` ganha um bloco `usuario_atual`: `{matricula, nome_exibicao, papel}`,
+  resolvido do header `X-Autor` da própria requisição (pessoa inexistente/`X-Autor`
+  ausente → tratar como não identificado; decidir o fallback — sugestão: `papel='leitura'`
+  até o picker rodar no cliente).
+- Endpoint pra listar pessoas pro seletor (provavelmente já existe via `/api/estado` ou
+  `cadastros.cadProjetos`-like; reusar, não duplicar).
+- Endpoint pra o usuário setar o próprio apelido: `PUT /api/pessoa/{matricula}/apelido`
+  body `{apelido}` (sem checagem de papel nesta rodada — cada um mexe no próprio; se
+  quiser, restringir a `matricula == X-Autor` pra não editar apelido alheio por engano).
+- **Corrigir a autoria da importação do BI**: `bi_import.py`/`versao.commitar_estado_bi`
+  hoje gravam `autor='BI'` fixo — passar a receber e usar o `X-Autor` de quem disparou o
+  upload (pessoa real). `SISTEMA` só entra quando existir de fato um caminho de importação
+  automática (não existe ainda).
+
+### 3. Frontend — seletor de primeira execução
+- No boot, se não há matrícula em `localStorage` (`alocacao.autor`): modal bloqueante,
+  lista de pessoas (busca por nome/matrícula), escolhe uma → grava no `localStorage`.
+- `api.js`: toda chamada mutante manda `X-Autor: <matrícula>` (mecanismo estava desenhado
+  em `docs/COLABORACAO.md` mas nunca chegou a ser ligado no cliente — é isso que fecha
+  agora).
+- Estado global (`S.usuario` ou equivalente) populado a partir do bloco `usuario_atual` de
+  `/api/estado` — disponível em toda a árvore de render, mesmo sem uso de enforcement
+  ainda (é o "chegar pra todo mundo" que você pediu).
+
+### 4. Frontend — ícone de Configurações (substitui o ícone de tema)
+- Trocar o ícone de tema na rail (canto inferior esquerdo) por uma **engrenagem**. Clique
+  abre um painel/modal **Configurações** contendo:
+  - **Tema** — o que já era o botão antigo (auto/claro/escuro), só que migrado pra dentro
+    daqui.
+  - **Usuário atual**: `nome_exibicao (papel)` + botão "Trocar usuário" → reabre o mesmo
+    seletor do primeiro acesso.
+  - **Meu apelido**: campo de texto, salva via `PUT /api/pessoa/{matricula}/apelido`.
+- Um indicativo permanente e discreto de quem está conectado (ex.: badge pequeno perto da
+  engrenagem, "· Augusto") — não precisa abrir Configurações pra saber quem está logado.
+
+### 5. Autoria visível
+- Em todo lugar que hoje mostra `autor`/nome de pessoa vindo de commit (histórico de
+  versões, badges do grafo, diálogos de merge/incorporação) — trocar para `nome_exibicao`
+  em vez do `pessoa.nome` cru.
+
+### 6. Testes
+- Migração: colunas novas existem, idempotente em 2ª chamada; pessoa `SISTEMA` criada uma
+  vez só.
+- `usuario_atual` em `/api/estado` reflete o `X-Autor` da requisição.
+- `PUT` de apelido grava e não aparece em `chg_pessoa`/diff de versionamento.
+- Importação do BI grava `commit_.autor` = quem disparou o upload, não mais `'BI'` fixo
+  (ajustar `test_bi.py` de acordo).
+
+### Fora de escopo nesta rodada (fica pro próximo passo)
+- Aplicar a matriz de permissão de fato (bloquear rotas/esconder custo por papel — os 6
+  pontos de enforcement listados acima).
+- UI de admin promovendo o papel de outra pessoa (hoje ninguém tem UI pra mudar `papel` de
+  ninguém — pode ser feito direto no banco enquanto isso).
+- Importação automática conectada no banco de origem (o motivo de existir `SISTEMA`, mas
+  não o caminho em si).
+
 ## Em aberto
 
 1. ~~Salvar com a branch adiantada: transparente ou sempre revisar?~~ **Decidido:** 4
@@ -159,8 +338,9 @@ Fase 2 junta branch↔branch.
    no seu território, então você olha antes; nível 4 (conflito real) sempre trava.
    Preferência `usuario.sempre_revisar` promove o nível 2 ao digest.
 2. Rascunho pode ser renomeado / ter mais de um por (autor, branch)? — hoje: **não**, um só.
-3. `main` protegida contra `salvar` direto (forçar branch + merge)? — provável que **não**
-   no v1, mas fácil de ligar depois (`ref_.protegida`).
+3. ~~`main` protegida contra `salvar` direto (forçar branch + merge)?~~ **Decidido
+   (2026-09-11):** sim — incorporar em Corrente (`main`) exige papel `coordenador`/`admin`.
+   Ver seção "Identidade e papel de acesso" acima.
 4. Autossave: e se o `PUT` falhar (rede)? Cliente mantém em `localStorage` e re‑tenta;
    badge "não salvo" enquanto pendente.
 5. Limpeza: rascunho abandonado há muito tempo — expira? notifica o autor?

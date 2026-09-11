@@ -285,6 +285,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if col not in have:
             conn.execute(f"ALTER TABLE pessoa ADD COLUMN {col} {typ}")
 
+    # identidade/papel de acesso (docs/COLABORACAO.md "Identidade e papel de acesso") —
+    # fora do versionamento de propósito: não entram em PESSOA_COLS (versao.py), gravam
+    # direto na tabela como `preferencias`. `papel` default 'leitura'; `apelido` é a
+    # facet de exibição do usuário (nome_exibicao), não do cadastro da pessoa.
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(pessoa)")}
+    if "papel" not in have:
+        conn.execute("ALTER TABLE pessoa ADD COLUMN papel TEXT NOT NULL DEFAULT 'leitura'")
+    if "apelido" not in have:
+        conn.execute("ALTER TABLE pessoa ADD COLUMN apelido TEXT")
+    # pessoa reservada pro autor de commits gerados sem humano por trás (import
+    # automática, ainda não existe — hoje toda importação é disparada manualmente por
+    # alguém, então o autor real é quem clicou, via X-Autor; ver bi_import.py).
+    conn.execute(
+        "INSERT OR IGNORE INTO pessoa (matricula, nome, apelido, papel) "
+        "VALUES ('SISTEMA', 'Sistema', 'Sistema', 'admin')"
+    )
+
     have_pr = {r["name"] for r in conn.execute("PRAGMA table_info(projeto)")}
     if "gestor_projetos" not in have_pr:
         conn.execute("ALTER TABLE projeto ADD COLUMN gestor_projetos TEXT")
