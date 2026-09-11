@@ -733,12 +733,15 @@ function renderRelatorioBI(resumo) {
 }
 
 function pedirConfirmacaoBI(resumo) {
+  // Sempre abre uma janela — com "Confirmar/Descartar" se mudou algo, ou só
+  // "Fechar" se a leitura deu igual ao que já está commitado.
   return new Promise((resolve) => {
     const dlg = $("#dlg-bi-relatorio");
     renderRelatorioBI(resumo);
     const okBtn = $("#bi-relatorio-confirmar");
     const cancelBtn = $("#bi-relatorio-cancelar");
-    okBtn.hidden = cancelBtn.hidden = !resumo.mudou;
+    okBtn.hidden = !resumo.mudou;
+    cancelBtn.textContent = resumo.mudou ? "Descartar" : "Fechar";
     okBtn.onclick = () => { dlg.close(); resolve(true); };
     cancelBtn.onclick = () => { dlg.close("cancel"); resolve(false); };
     dlg.addEventListener("cancel", () => resolve(false), { once: true });
@@ -757,13 +760,17 @@ fileInput.addEventListener("change", async () => {
       const res = await api.importarBI(fileInput.files);
       S.estado = res.estado;
       if (arq) arq.textContent = res.resultados.map(fmtResultado).join("\n");
-      if (res.pendente) {
+      if (res.resumo) {
         const confirmou = await pedirConfirmacaoBI(res.resumo);
-        const res2 = confirmou ? await api.confirmarBI() : await api.descartarBI();
-        S.estado = res2.estado;
-        log(confirmou ? `commit do BI: #${res2.commit_bi}` : "importação do BI descartada");
+        if (res.resumo.mudou) {
+          const res2 = confirmou ? await api.confirmarBI() : await api.descartarBI();
+          S.estado = res2.estado;
+          log(confirmou ? `commit do BI: #${res2.commit_bi}` : "importação do BI descartada");
+        } else {
+          log("BI lido — sem mudanças, nada commitado");
+        }
       } else {
-        log("BI lido — " + (res.resumo && !res.resumo.mudou ? "sem mudanças, nada commitado" : "nada para commitar"));
+        log("sem colab-mes-custo no lote — nada para relatar ainda");
       }
     } else {
       const res = await api.importarProjeto(fileInput.files);
