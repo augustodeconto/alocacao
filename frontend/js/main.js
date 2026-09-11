@@ -303,7 +303,7 @@ function renderGridProjeto() {
       tb.append(addRow("+ adicionar pessoa", "ind2",
         () => openAddAloc({ projeto_id: proj.projeto_id, tipo_alocacao: grp.tipo_alocacao })));
     }
-    tb.append(addRow("+ adicionar tipo/equipe", "ind1",
+    tb.append(addRow("+ adicionar tipo", "ind1",
       () => openAddAloc({ projeto_id: proj.projeto_id })));
   }
   gridProj.append(tb);
@@ -728,8 +728,7 @@ function renderRelatorioBI(resumo) {
     if (resumo[k] != null) ul.append(el("li", {}, `${resumo[k]} ${label}`));
   }
   body.append(ul);
-  body.append(el("p", { className: "muted" },
-    "Isso vira um commit no branch BI (e a main anda junto, se ainda não tiver commit próprio à frente)."));
+  body.append(el("p", { className: "muted" }, "Há mudanças prontas para aplicar."));
 }
 
 function pedirConfirmacaoBI(resumo) {
@@ -1464,11 +1463,15 @@ function paintVer() {
     row.topLanes.forEach((v, L) => {
       if (v == null) return;
       if (v === row.c.commit_id) {
-        add("path", { d: ggEdge(ggX(L), y - GG.RH / 2, ggX(row.col), y), stroke: laneCor(row.col), "stroke-width": 2, fill: "none" });
+        // chega no nó: mantém a cor da raia de origem (a linhagem que está
+        // convergindo), não a da raia de destino — senão o traço muda de cor
+        // bem no ponto em que duas raias se juntam num commit.
+        add("path", { d: ggEdge(ggX(L), y - GG.RH / 2, ggX(row.col), y), stroke: laneCor(L), "stroke-width": 2, fill: "none" });
       } else {
-        let B = row.botLanes.indexOf(v);
-        if (B < 0) B = L;
-        add("path", { d: ggEdge(ggX(L), y - GG.RH / 2, ggX(B), y + GG.RH / 2), stroke: laneCor(B), "stroke-width": 2, fill: "none" });
+        // passagem: essa raia não é a do commit desta linha — continua reta na
+        // mesma coluna até a raia (`col`) do commit-alvo, que faz a convergência
+        // visual só quando o alvo aparece de fato, não antes.
+        add("path", { d: ggEdge(ggX(L), y - GG.RH / 2, ggX(L), y + GG.RH / 2), stroke: laneCor(L), "stroke-width": 2, fill: "none" });
       }
     });
     // linhas que saem para os pais
@@ -1653,7 +1656,7 @@ function paintDiff(d) {
   grupo("Projetos", r.projetos, { c: r.projetos }, (b) => {
     for (const x of d.projetos) b.append(linhaItem(x.nome, x.tag, x.campos.length ? campos(x.campos) : null));
   });
-  grupo("Recursos", r.pessoas, { c: r.pessoas }, (b) => {
+  grupo("Pessoas", r.pessoas, { c: r.pessoas }, (b) => {
     for (const x of d.pessoas) b.append(linhaItem(x.nome, x.tag, x.campos.length ? campos(x.campos) : null));
   });
   grupo("Alocações", r.alocacoes, { a: r.alocacoes_add, d: r.alocacoes_rem, c: r.celulas }, (b) => {

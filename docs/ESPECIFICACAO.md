@@ -28,6 +28,60 @@ central de planejamento, branches de cenário, merge/commit no plano principal. 
 do banco já nasce compatível (períodos em formato longo; projeto/alocação/pessoa
 normalizados).
 
+## 1-A. Vocabulário
+
+Termos que são usados como se fossem sinônimos, mas **não são** — cada um significa
+exatamente uma coisa neste documento e no código. Onde um nome de entidade aparece em
+código/API, é indicado entre parênteses.
+
+- **Pessoa** (`pessoa`) — a entidade humana. É o conceito mais estável e neutro; tudo o
+  mais abaixo é uma faceta dela, nunca outra entidade.
+- **Colaborador** — uma pessoa com algum vínculo de trabalho com a organização (empregado,
+  bolsista, terceiro etc., dependendo da linguagem da empresa). Não é o nome da tabela nem
+  da entidade — é um jeito de descrever o vínculo de uma pessoa.
+- **Recurso** — o papel da pessoa no planejamento de capacidade/alocação. É uma visão
+  gerencial ("por recurso", "carga do recurso", "capacidade disponível"), não a identidade
+  da pessoa. Usado nas telas de planejamento; a tela de cadastro fala em **pessoa**, não em
+  recurso (cadastrar pessoa, dados da pessoa).
+- **Membro de equipe / membro do projeto** — pessoa vinculada a uma equipe ou a um projeto
+  (no banco: uma linha de `alocacao`, `(projeto_id, matricula, tipo_alocacao)`).
+- **Usuário** — pessoa com acesso ao sistema. É outra faceta da pessoa, não uma entidade
+  separada nem sinônimo de "todo mundo cadastrado" — nem toda pessoa cadastrada precisa ser
+  usuária. Ver `docs/COLABORACAO.md` para o modelo de identidade/papel de acesso.
+- **Nome** — atributo de uma pessoa (`pessoa.nome`), nunca usado como nome de entidade.
+- **Equipe** (`pessoa.equipe`) — agrupamento organizacional da pessoa (vem do extrato
+  "equipe" do BI, campo `Nome_equipe`). **Não é sinônimo de `tipo_alocacao`.**
+
+**Atenção — colisão histórica já corrigida:** `tipo_alocacao` (o balde de custo/fonte de
+um projeto — `Técnica`, `TecnicaANP`, `OffShore`...) foi chamado de "equipe" em vários
+lugares deste documento e na UI até 2026-09-10. São dois eixos completamente diferentes:
+`pessoa.equipe` é um atributo da pessoa; `tipo_alocacao` é uma propriedade da linha de
+alocação num projeto. Daqui em diante, **`tipo_alocacao` nunca é chamado de "equipe"** —
+só `pessoa.equipe` pode ser.
+
+**Vocabulário da interface de versionamento** — diretiva completa em
+[`docs/TERMINOLOGIA.md`](TERMINOLOGIA.md). O mecanismo interno continua Git-like (`main`,
+`commit`, `branch`, `merge`, `checkout` seguem como nomes técnicos no banco/código), mas a
+**UI nunca expõe esses termos como primário** — usa a tradução abaixo (Git entre
+parênteses/tooltip, se útil):
+
+| Interface | Técnico |
+|---|---|
+| Versão | commit |
+| Salvar versão | ação de commit |
+| Cenário | branch criado pelo usuário |
+| Corrente | `main` |
+| Publicado | branch `BI` |
+| Abrir cenário | checkout |
+| Incorporar cenário | merge |
+| Conflito de alterações / Resolver conflito | merge conflict |
+| Histórico de versões | log |
+| Alterações pendentes | working tree sujo / uncommitted |
+| Descartar alterações (deste projeto / pendentes) | reset/discard |
+| Atualizar | refresh |
+
+Tabela completa e regras de uso em `docs/TERMINOLOGIA.md` §19.
+
 ## 2. Formato do arquivo de projeto (import/export)
 
 ### Aba `dados_projeto` (1 linha de dados, linha 2)
@@ -41,7 +95,7 @@ export, ignoradas na leitura.
 | Col | Campo | Natureza |
 |-----|-------|----------|
 | A | `Matricula` | número — identidade da pessoa |
-| B | `Tipo Alocacao` | string de catálogo (`Técnica, Econômica, Prospecção, OffShore, TecnicaEPII, TecnicaANP`), dropdown `Planilha4!$P$2:$Q$25`. **É a "equipe do projeto"** (balde de custo/fonte). |
+| B | `Tipo Alocacao` | string de catálogo (`Técnica, Econômica, Prospecção, OffShore, TecnicaEPII, TecnicaANP`), dropdown `Planilha4!$P$2:$Q$25`. É o balde de custo/fonte do projeto; **não confundir com `pessoa.equipe`**, que é o time organizacional da pessoa (ver §1-A Vocabulário). |
 | C | `id_tipo` | **fórmula** `=IF(ISBLANK(Bn),"",VLOOKUP(Bn,Planilha4!$P$2:$Q$25,2,FALSE))` — derivada |
 | D | `Perfil` | string — nome da pessoa (literal) |
 | E… | meses | nº de colunas **variável por projeto**; cabeçalho = data serial do dia 1 do mês, a partir de `Mês/Ano Início`. Valor = **horas inteiras**. `0` no arquivo = mês sem alocação — **não vira registro** no banco (ver §7). |
@@ -300,10 +354,10 @@ nome do projeto (depois `tipo_alocacao`). `tipo_alocacao` vem do catálogo fixo 
 
 ### Grade "Por Projeto" — 3 níveis
 - Nível 0: **projeto**. Total do mês (leitura, negrito).
-- Nível 1: **tipo de alocação / equipe** (`TecnicaANP`, `TecnicaEPII`, `Técnica`…) — grupo
+- Nível 1: **tipo de alocação** (`TecnicaANP`, `TecnicaEPII`, `Técnica`…) — grupo
   com subtotal do mês. Um `●` no rótulo indica que o grupo tem alteração não exportada.
 - Nível 2: **pessoa**. Célula = horas (**editável**), cor `(matrícula, mês)`.
-- `+ adicionar pessoa` por grupo (tipo pré-preenchido); `+ adicionar tipo/equipe` por projeto.
+- `+ adicionar pessoa` por grupo (tipo pré-preenchido); `+ adicionar tipo` por projeto.
 - **Mover de tipo:** `<select>` na linha da pessoa (aparece no hover) — troca o
   `tipo_alocacao` da alocação. No diff isso vira "removido do tipo antigo" + "novo no tipo
   novo" (o export zera um e lança o outro).
@@ -458,6 +512,24 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-11** — **Diretiva de terminologia da interface** ([`docs/TERMINOLOGIA.md`](TERMINOLOGIA.md)).
+  Formaliza o vocabulário canônico (Pessoa/Recurso/Colaborador/Usuário/Equipe/Tipo de
+  alocação, já alinhado com §1-A) **e** a tradução da camada de versionamento Git-like para
+  linguagem de gerente de projeto: commit→**Versão** (ação: Salvar versão), branch do
+  usuário→**Cenário**, `main`→**Corrente**, branch `BI`→**Publicado**, checkout→**Abrir
+  cenário**, merge→**Incorporar cenário**, merge conflict→**Conflito de alterações**,
+  log→**Histórico de versões**, working sujo→**Alterações pendentes**, reset→**Descartar
+  alterações**, refresh→**Atualizar**. Termos técnicos (`main`, `commit`, `branch`, nomes
+  internos/API) continuam como estão — só a UI muda; termo Git pode aparecer secundário em
+  tooltip/parênteses. Mudança de UI (tela Versões) fica a cargo da outra sessão.
+- **2026-09-10** — **Vocabulário canônico + fim da colisão `tipo_alocacao`/"equipe".**
+  Nova seção §1-A define Pessoa, Colaborador, Recurso, Membro de equipe/projeto, Usuário,
+  Nome e Equipe como facetas/conceitos distintos, não sinônimos. Corrigida a colisão real
+  já existente: `tipo_alocacao` (balde de custo/fonte do projeto) vinha sendo chamado de
+  "equipe" em vários pontos deste documento (e em `CLAUDE.md`), colidindo com
+  `pessoa.equipe` (time organizacional da pessoa, vindo do extrato BI). Daqui em diante
+  "equipe" só significa `pessoa.equipe`. Troca de labels equivalente na UI/backend
+  (`index.html`, `main.js`, `main.py`) entra à parte.
 - **2026-09-10** — **Import do BI em duas fases: relatório → confirmação.**
   `POST /api/importar-bi` lê os arquivos e devolve um relatório (`resumo`) sem commitar nada
   (`bi_import.preparar_importacao`, guardado em `bi_pendente`); só grava o commit no branch

@@ -7,13 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Local single-user web app for **monthly researcher-allocation planning**. The internal
 **SQLite database is the source of truth**; `.xlsx` files are import/export interchange only.
 The user edits, month by month, how many hours each person is allocated to each project
-(subdivided by `tipo_alocacao` — the project's cost bucket / "equipe"), across two
+(subdivided by `tipo_alocacao` — the project's cost bucket; never called "equipe", which
+is a different, unrelated field on `pessoa` — see the Vocabulário section in
+`docs/ESPECIFICACAO.md`), across two
 synchronized tree grids (by project, by resource).
 
 `docs/ESPECIFICACAO.md` is a **living spec** — the user requires it to be kept in sync as
 development proceeds, including its "Histórico de mudanças" section. `docs/VERSIONAMENTO.md`
 is the agreed (not yet implemented) plan to evolve the versioning into real Git-style
-branches + merge.
+branches + merge. `docs/TERMINOLOGIA.md` is the binding directive for vocabulary: internal
+names may stay Git-flavored (`main`, `commit`, `branch`, `pessoa`), but user-facing UI text
+must use the mapped terms (commit→Versão, branch→Cenário, `main`→Corrente, `BI`→Publicado,
+merge→Incorporar cenário, checkout→Abrir cenário, etc.) — see its §19 mapping table before
+writing or reviewing any UI copy in the Versões view.
 
 ## Commands
 

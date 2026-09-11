@@ -563,7 +563,7 @@ def editar_mes_lote(payload: dict = Body(...)):
 
 @app.put("/api/alocacao/{alocacao_id}/tipo")
 def mudar_tipo(alocacao_id: int, payload: dict = Body(...)):
-    """Move a pessoa para outro tipo de alocação (equipe) no mesmo projeto."""
+    """Move a pessoa para outro tipo de alocação no mesmo projeto."""
     with _lock:
         novo = str(payload.get("tipo_alocacao") or "").strip()
         if not novo:
