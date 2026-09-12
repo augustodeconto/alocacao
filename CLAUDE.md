@@ -17,7 +17,7 @@ development proceeds, including its "Histórico de mudanças" section. `docs/VER
 is the agreed (not yet implemented) plan to evolve the versioning into real Git-style
 branches + merge. `docs/TERMINOLOGIA.md` is the binding directive for vocabulary: internal
 names may stay Git-flavored (`main`, `commit`, `branch`, `pessoa`), but user-facing UI text
-must use the mapped terms (commit→Versão, branch→Cenário, `main`→Corrente, `BI`→Publicado,
+must use the mapped terms (commit→Versão, branch→Cenário, `main`→Principal, `BI`→Publicado,
 merge→Incorporar cenário, checkout→Abrir cenário, etc.) — see its §19 mapping table before
 writing or reviewing any UI copy in the Versões view.
 

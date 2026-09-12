@@ -29,7 +29,7 @@ PROJETO_COLS = [
 def _nome_cenario(nome: str) -> str:
     """Nome da branch (técnico) -> nome do cenário na interface, pra mensagens de commit
     geradas automaticamente (ver docs/TERMINOLOGIA.md)."""
-    return {"main": "Corrente", "BI": "Publicado"}.get(nome, nome)
+    return {"main": "Principal", "BI": "Publicado"}.get(nome, nome)
 
 
 PESSOA_COLS = [

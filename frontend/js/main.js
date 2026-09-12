@@ -103,12 +103,10 @@ function setOpen(which, open) {
 function pct(horas, cap) { return cap ? Math.round((horas / cap) * 100) + "%" : "–"; }
 function pctNum(horas, cap) { return cap ? Math.round((horas / cap) * 100) : ""; }
 
-function cellValueNodes(horas, cap, sev) {
+function cellValueNodes(horas, cap) {
   const main = S.displayUnit === "horas" ? String(horas) : pct(horas, cap);
   const twin = S.displayUnit === "horas" ? (cap ? pct(horas, cap) : "") : String(horas);
   const frag = document.createDocumentFragment();
-  const icon = sevIconEl(sev);
-  if (icon) frag.append(icon);
   frag.append(document.createTextNode(main));
   if (twin) frag.append(el("span", { className: "twin" }, twin));
   return frag;
@@ -200,7 +198,9 @@ function monthCell(cls, contentFrag, { extra, colorClass, alt, title, per } = {}
   if (extra) td.classList.add("extra");
   if (alt) td.classList.add("alt");
   if (colorClass) td.classList.add(colorClass);
-  if (title) td.title = title;
+  const sevTitle = colorClass && SEV_TITLE[colorClass];
+  const fullTitle = title && sevTitle ? `${sevTitle} · ${title}` : title || sevTitle;
+  if (fullTitle) td.title = fullTitle;
   if (contentFrag != null) td.append(contentFrag);
   return td;
 }
@@ -232,40 +232,13 @@ function colorClassFor(cores, periodo) {
   return c === "amarelo" ? "over" : c === "vermelho" ? "under" : null;
 }
 
-// Ícones de severidade — pequenos, alongados verticalmente (largura ~ cabe no espaço
-// em branco à esquerda do número grande da célula), sem pintar a célula inteira.
-// mesma família (relógio) pros dois, só que o de superalocação é um despertador tocando
-// — sininhos no topo + ponteiros bem abertos — pra ficar claramente distinto do relógio
-// parado da subalocação mesmo pequeno, mas ainda "parceiro" visualmente.
-const SEV_ICON = {
-  over: {   // superalocado: despertador tocando
-    titulo: "superalocado — acima da capacidade",
-    svg: `<svg viewBox="0 0 14 14" aria-hidden="true">
-      <line x1="2.3" y1="2.6" x2="4" y2="4.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <line x1="11.7" y1="2.6" x2="10" y2="4.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <circle cx="7" cy="8" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
-      <line x1="7" y1="8" x2="7" y2="5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <line x1="7" y1="8" x2="9.4" y2="9.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <line x1="1.4" y1="9.4" x2="0.4" y2="11.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-      <line x1="12.6" y1="9.4" x2="13.6" y2="11.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-    </svg>`,
-  },
-  under: {   // subalocado: relógio parado (tempo ocioso)
-    titulo: "subalocado — abaixo da capacidade",
-    svg: `<svg viewBox="0 0 14 14" aria-hidden="true">
-      <circle cx="7" cy="7.5" r="5.3" fill="none" stroke="currentColor" stroke-width="1.4"/>
-      <line x1="7" y1="7.5" x2="7" y2="4.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <line x1="7" y1="7.5" x2="9.6" y2="7.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-    </svg>`,
-  },
+// sub/superalocação: barra colorida na borda inferior da célula (ver monthCell/CSS
+// `.month.over`/`.month.under`) — substitui o ícone antigo, pesado demais nos 62px de
+// largura da coluna de mês. O texto do tooltip fica centralizado aqui.
+const SEV_TITLE = {
+  over: "superalocado — acima da capacidade",
+  under: "subalocado — abaixo da capacidade",
 };
-function sevIconEl(sev) {
-  const d = SEV_ICON[sev];
-  if (!d) return null;
-  const span = el("span", { className: `sev-icon sev-${sev}`, title: d.titulo });
-  span.innerHTML = d.svg;
-  return span;
-}
 
 // Linha de alocação que vale a pena mostrar: some só se nenhum mês dentro da janela do
 // filtro de período (docs/ESPECIFICACAO.md §8) tiver hora dela — mesmo critério das
@@ -338,7 +311,7 @@ function renderGridProjeto() {
         for (const p of PERIODOS) {
           const h = f.horas[p] || 0;
           const sev = rem ? null : colorClassFor(f.cores, p);
-          tr.append(monthCell(rem ? "cell" : "cell editable", cellValueNodes(h, f.capacidade_mensal, sev),
+          tr.append(monthCell(rem ? "cell" : "cell editable", cellValueNodes(h, f.capacidade_mensal),
             { per: p, extra: !janela.has(p), colorClass: sev, ...altInfo(f, p) }));
         }
         tb.append(tr);
@@ -370,7 +343,7 @@ function renderGridRecurso() {
     tr0.append(treeCell(pes.nome, { level: 0, key, expandable: true }));
     for (const p of PERIODOS) {
       const sev = colorClassFor(pes.cores, p);
-      tr0.append(monthCell("total", cellValueNodes(pes.totais[p] || 0, pes.capacidade_mensal, sev),
+      tr0.append(monthCell("total", cellValueNodes(pes.totais[p] || 0, pes.capacidade_mensal),
         { colorClass: sev, ...totAltInfo(pes, p) }));
     }
     tb.append(tr0);
@@ -527,33 +500,54 @@ function hideAlocCtx() { const m = $("#aloc-ctx"); if (m) m.hidden = true; }
 // `cells` = [{alocacaoId, periodo}] — a seleção inteira, ou só a célula clicada (ver
 // EG.cellsPara em grid-excel.js). Cada célula pode ser de uma pessoa diferente, então
 // o ajuste (quantas horas = 100%) é calculado por célula, nunca um valor só pra todas.
+// total da pessoa (todos os projetos/tipos) naquele mês — já vem pronto do servidor
+// em por_recurso (aggregate.build_grade), é o mesmo número comparado à capacidade.
+function totalPessoaNoMes(matricula, periodo) {
+  const rec = (S.estado?.grade?.por_recurso || []).find((r) => r.matricula === matricula);
+  return (rec && rec.totais[periodo]) || 0;
+}
+
 function abrirAjusteAlocacao(cells, ev) {
   const validas = cells
-    .map((c) => ({ ...c, cap: ALOC_INFO[c.alocacaoId]?.capacidade_mensal }))
+    .map((c) => ({
+      ...c,
+      cap: ALOC_INFO[c.alocacaoId]?.capacidade_mensal,
+      matricula: ALOC_INFO[c.alocacaoId]?.matricula,
+    }))
     .filter((c) => c.cap);
   if (!validas.length) return;   // ninguém na seleção tem capacidade cadastrada
 
-  const capsIguais = new Set(validas.map((c) => c.cap)).size === 1;
-  const capUnica = validas[0].cap;
+  // Bug corrigido em 2026-09-12: "normalizar"/100%/75%... tratava a célula como se
+  // fosse a ÚNICA alocação da pessoa naquele mês, sugerindo cap*pct mesmo quando ela
+  // já tinha outras alocações ocupando parte da capacidade — resultado: sugeria
+  // completar pra 100% uma pessoa que já estava em 100% (ou mais) somando tudo.
+  // `outras` = tudo que já é dela naquele mês FORA desta célula; o alvo desta célula
+  // é o que falta pra fechar `cap*pct/100` no TOTAL da pessoa, nunca negativo.
+  const outras = (c) => totalPessoaNoMes(c.matricula, c.periodo) - horasAtual(c.alocacaoId, c.periodo);
+  const alvo = (c, pct) => Math.max(0, Math.round(c.cap * pct / 100 - outras(c)));
 
   const aplicar = async (pct) => {
     const edits = validas.map((c) => ({
       alocacao_id: c.alocacaoId, periodo: c.periodo,
-      valor: String(Math.round(c.cap * pct / 100)),
+      valor: String(alvo(c, pct)),
     }));
     hideAlocCtx();
     await applyBatch(edits);
   };
 
-  // "(+35h)" no botão de normalizar: mesmo delta pra todo mundo, ou "vários" se a
-  // seleção tiver gente com capacidade/horas atuais diferentes.
-  const deltas = validas.map((c) => c.cap - horasAtual(c.alocacaoId, c.periodo));
+  // "(+35h)" no botão de normalizar: quanto ESTA linha precisa mudar pra fechar o
+  // total da pessoa em 100% da capacidade naquele mês (considerando as outras
+  // alocações dela) — mesmo delta pra todo mundo na seleção, ou "vários" se variar.
+  const deltas = validas.map((c) => alvo(c, 100) - horasAtual(c.alocacaoId, c.periodo));
   const deltaTxt = new Set(deltas).size === 1 ? `${deltas[0] > 0 ? "+" : ""}${deltas[0]}h` : "vários";
+  // já está em 100% (somando tudo) pra toda a seleção -> normalizar seria um no-op.
+  const jaNormalizado = deltas.every((d) => d === 0);
 
   const m = $("#aloc-ctx");
   m.innerHTML = "";
   const btnNorm = el("button", {
     className: "aloc-normalizar", title: "Ajustar para alocação plena (100%)",
+    disabled: jaNormalizado,
     onclick: () => aplicar(100),
   });
   // quebra fixa em 2 linhas de propósito — sem isso, a largura do "(+35h)"/"(0h)"
@@ -565,8 +559,10 @@ function abrirAjusteAlocacao(cells, ev) {
 
   const row = el("div", { className: "aloc-niveis" });
   for (const pct of ALOC_CTX_NIVEIS) {
+    const alvos = validas.map((c) => alvo(c, pct));
+    const alvosIguais = new Set(alvos).size === 1;
     const rotulo = S.displayUnit === "pct" ? `${pct}%`
-      : capsIguais ? `${Math.round(capUnica * pct / 100)}h` : `${pct}%`;
+      : alvosIguais ? `${alvos[0]}h` : `${pct}%`;
     const btn = el("button", { onclick: () => aplicar(pct) });
     btn.innerHTML = `${_iconNivel(pct / 100)}<span>${rotulo}</span>`;
     row.append(btn);
@@ -1084,7 +1080,7 @@ fileInput.addEventListener("change", async () => {
         if (res.resumo.mudou) {
           const res2 = confirmou ? await api.confirmarBI() : await api.descartarBI();
           S.estado = res2.estado;
-          log(confirmou ? `versão salva no Publicado: #${res2.commit_bi}` : "importação do BI descartada");
+          log(confirmou ? `versão consolidada no Publicado: #${res2.commit_bi}` : "importação do BI descartada");
         } else {
           log("BI lido — sem mudanças, nada para salvar");
         }
@@ -1531,6 +1527,7 @@ function renderResumoPessoa() {
     return;
   }
 
+  const area = pes?.area || "";
   const cargo = pes?.tipo_contrato || "";
   const ficha = [];
   if (pes?.situacao && pes.situacao !== cargo) ficha.push(pes.situacao);
@@ -1631,6 +1628,7 @@ function renderResumoPessoa() {
 
   body.innerHTML = `
     <div class="sec-pessoa-nome">${nome}</div>
+    ${area ? `<div class="sec-pessoa-area">${area}</div>` : ""}
     ${cargo ? `<div class="sec-pessoa-cargo">${cargo}</div>` : ""}
     ${ficha.length || fimFmt ? `<div class="sec-pessoa-ficha">${ficha.join(" · ")}${ficha.length && fimFmt ? " · " : ""}${
       fimFmt ? `<span class="${fimVencido ? "sec-vencido" : ""}">contrato até ${fimFmt}</span>` : ""}</div>` : ""}
@@ -1663,7 +1661,32 @@ const CAD_LABELS = {
   matricula: "Matrícula", carga_diaria: "Carga diária",
   capacidade_mensal: "Capacidade mensal", ativo: "Ativo", area: "Área",
   tipo_contrato: "Tipo contrato", situacao: "Situação", fim_contrato: "Fim contrato",
+  formacao: "Formação",
 };
+// campos de pessoa/projeto que já têm catálogo por trás mas gravam o TEXTO direto
+// (não um id — diferente do id_status, que é FK numérica de verdade). value do
+// <option> = o próprio texto do catálogo.
+const CAD_CATALOGO_DE = { area: "area", tipo_contrato: "contrato", formacao: "ensino" };
+
+function _pessoaLabel(p) { return `${p.nome} (${p.matricula})`; }
+// resolve o texto digitado/escolhido no <input list="cad-pessoas-dl"> de volta pra
+// matrícula: casa com o rótulo "Nome (matrícula)" do catálogo de pessoas, ou aceita a
+// matrícula crua digitada direto (compatibilidade com o que já estava salvo).
+function _matriculaFromLabel(label) {
+  const pessoas = S.estado?.pessoas || [];
+  const alvo = (label || "").trim();
+  const exato = pessoas.find((p) => _pessoaLabel(p) === alvo);
+  if (exato) return exato.matricula;
+  const porMatricula = pessoas.find((p) => String(p.matricula) === alvo);
+  return porMatricula ? porMatricula.matricula : alvo;
+}
+function _refreshPessoasDatalist() {
+  const dl = $("#cad-pessoas-dl");
+  if (!dl) return;
+  dl.innerHTML = "";
+  for (const p of (S.estado?.pessoas || []).slice().sort((a, b) => a.nome.localeCompare(b.nome)))
+    dl.append(el("option", { value: _pessoaLabel(p) }));
+}
 const CAD_NUM = new Set(["id_status", "id_filial",
   "cenario1", "cenario2", "cenario3", "carga_diaria", "capacidade_mensal"]);
 let CAD = { tab: "projetos", cols: [], editaveis: [], rows: [] };
@@ -1682,6 +1705,31 @@ function cadCellInput(row, col) {
       ...opts.map((o) => el("option", {
         value: String(o.id), textContent: o.texto, selected: String(row[col]) === String(o.id),
       })));
+  } else if (col === "matricula_gp") {
+    // FK real (pessoa.matricula), mas edita por nome — busca com <datalist>, grava a
+    // matrícula resolvida no commit (ver _matriculaFromLabel). Mostra o rótulo
+    // "Nome (matrícula)" quando reconhece a pessoa; senão, o valor cru salvo.
+    const pessoa = (S.estado?.pessoas || []).find((p) => String(p.matricula) === String(row[col]));
+    const label = pessoa ? _pessoaLabel(pessoa) : (row[col] ?? "");
+    // "list" é só-leitura como propriedade do DOM (referencia o <datalist>, não
+    // aceita atribuição via `.list=`) — precisa ir por setAttribute, não pelo `el()`
+    // genérico (que tentaria `n.list = ...` e lançaria erro em módulo ES/strict mode).
+    inp = el("input", { type: "text", value: label, placeholder: "buscar por nome…" });
+    inp.setAttribute("list", "cad-pessoas-dl");
+  } else if (col in CAD_CATALOGO_DE) {
+    // área / tipo de contrato / formação: catálogo fixo, mas grava o TEXTO direto
+    // (sem id próprio nessas 3 — diferente de id_status).
+    const opts = (S.estado?.catalogos?.[CAD_CATALOGO_DE[col]] || []).map((o) => o.texto);
+    inp = el("select", {},
+      el("option", { value: "", textContent: "—", selected: !row[col] }),
+      ...opts.map((t) => el("option", { value: t, textContent: t, selected: row[col] === t })));
+  } else if (col === "situacao") {
+    // catálogo só tem Desligado/Planejado — "Ativo" é o padrão implícito (ver
+    // aggregate.ativa: `situacao` vazia == Ativo), então entra como opção explícita.
+    const opts = ["Ativo", ...(S.estado?.catalogos?.ativo || []).map((o) => o.texto)];
+    inp = el("select", {}, ...opts.map((t) => el("option", {
+      value: t, textContent: t, selected: (row[col] || "Ativo") === t,
+    })));
   } else {
     inp = el("input", { type: CAD_NUM.has(col) ? "number" : "text", value: row[col] ?? "" });
     if (col === "carga_diaria") inp.step = "0.5";
@@ -1691,22 +1739,28 @@ function cadCellInput(row, col) {
     if (String(inp.value) === inp._orig) return;
     const td = inp.closest("td");
     td.classList.remove("saved", "error");
+    const valor = col === "matricula_gp" ? _matriculaFromLabel(inp.value) : inp.value;
     try {
       const key = CAD.tab === "projetos" ? row.projeto_id : row.matricula;
       const save = CAD.tab === "projetos" ? api.cadSalvarProjeto : api.cadSalvarPessoa;
-      const { linha } = await save(key, { [col]: inp.value === "" ? null : inp.value });
+      const { linha } = await save(key, { [col]: valor === "" ? null : valor });
       Object.assign(row, linha);
+      if (col === "matricula_gp") {
+        const pessoa = (S.estado?.pessoas || []).find((p) => String(p.matricula) === String(row[col]));
+        inp.value = pessoa ? _pessoaLabel(pessoa) : (row[col] ?? "");
+      }
       inp._orig = String(inp.value);
       td.classList.add("saved");
       log(`${CAD_LABELS[col] || col} salvo.`);
-      if (col === "id_status") {
-        // "Status" é uma coluna derivada ao lado, só leitura — atualiza o texto dela
+      if (col === "id_status" || col === "matricula_gp") {
+        // coluna derivada só-leitura ao lado (Status / Gestor) — atualiza o texto dela
         // também, senão fica mostrando o valor antigo até trocar de aba.
+        const derivada = col === "id_status" ? "status" : "gestor_projetos";
         const tr = td.closest("tr");
-        const idx = CAD.cols.indexOf("status");
-        if (idx >= 0 && tr.children[idx]) tr.children[idx].textContent = row.status ?? "";
+        const idx = CAD.cols.indexOf(derivada);
+        if (idx >= 0 && tr.children[idx]) tr.children[idx].textContent = row[derivada] ?? "";
       }
-      if (["nome", "gestor_projetos", "capacidade_mensal", "ativo", "situacao", "fim_contrato", "id_status"].includes(col)) {
+      if (["nome", "gestor_projetos", "matricula_gp", "capacidade_mensal", "ativo", "situacao", "fim_contrato", "id_status"].includes(col)) {
         try { S.estado = await api.estado(); } catch {}
       }
     } catch (e) {
@@ -1763,6 +1817,7 @@ function cadRenderCatalogo(cat) {
 
 async function cadLoad(tab) {
   CAD.tab = S.cadTab = tab;
+  _refreshPessoasDatalist();
   for (const b of document.querySelectorAll("#cad-toolbar .cad-tabs button"))
     b.classList.toggle("on", b.dataset.tab === tab);
   $("#cad-novo").hidden = tab !== "projetos";
@@ -1858,7 +1913,7 @@ function layoutGrafo(commits) {
 }
 
 // nome da branch (técnico) -> nome do cenário na interface (ver docs/TERMINOLOGIA.md)
-const nomeCenario = (nome) => (nome === "main" ? "Corrente" : nome === "BI" ? "Publicado" : nome);
+const nomeCenario = (nome) => (nome === "main" ? "Principal" : nome === "BI" ? "Publicado" : nome);
 // contagem primeiro, concordância em número/gênero, sem parênteses: "1 alteração não
 // salva" / "3 alterações não salvas" (ver docs/TERMINOLOGIA.md §15)
 const alteracoesTxt = (n) => `${n} alteraç${n === 1 ? "ão" : "ões"} não salva${n === 1 ? "" : "s"}`;
@@ -1882,7 +1937,7 @@ function paintVer() {
     el("span", { className: "dot", style: g.protegida ? "background:var(--muted)" : "" }),
     document.createTextNode(" em: "),
     el("b", {}, nomeCenario(g.branch)),
-    g.protegida ? el("span", { className: "lock", title: "Corrente é protegida — não recebe versão direta; salve num cenário" }, " 🔒") : "",
+    g.protegida ? el("span", { className: "lock", title: "Principal é protegida — não recebe versão direta; salve num cenário" }, " 🔒") : "",
   );
 
   const pend = g.pendente || {};
@@ -1894,13 +1949,13 @@ function paintVer() {
 
   const cb = $("#ver-commit");
   if (g.protegida) {
-    cb.innerHTML = "↪&nbsp;Salvar num cenário…";
+    cb.innerHTML = "↪&nbsp;Consolidar num cenário…";
     cb.title = `'${nomeCenario(g.branch)}' é protegida — mova o trabalho para um cenário novo`;
     cb.onclick = verSalvarEmBranch;
     cb.disabled = !g.sujo || !!g.merge;
   } else {
-    cb.innerHTML = "✔&nbsp;Salvar versão…";
-    cb.title = "Salva uma versão. (commit)";
+    cb.innerHTML = "✔&nbsp;Consolidar alterações…";
+    cb.title = "Cria uma versão (commit) no cenário atual.";
     cb.onclick = verCommit;
     cb.disabled = !g.sujo || !!g.merge;
   }
@@ -2256,7 +2311,7 @@ function ctxBranch(nome, ev) {
 }
 
 async function criarBranchDe(c) {
-  if (VER.grafo.sujo) { log("há alterações não salvas — salve uma versão ou descarte antes de abrir outro cenário", true); return; }
+  if (VER.grafo.sujo) { log("há alterações não salvas — consolide uma versão ou descarte antes de abrir outro cenário", true); return; }
   const nome = prompt(`Criar cenário a partir da versão #${c.commit_id} ("${(c.mensagem || "").slice(0, 40)}") e abrir:`,
     `v${c.commit_id}`);
   if (!nome || !nome.trim()) return;
@@ -2293,11 +2348,11 @@ async function verSalvarEmBranch() {
     await recarregar();
     log(`agora em "${nome.trim()}" com as pendências`);
     if (VER.grafo && VER.grafo.sujo) {
-      const m = prompt("Salvar uma versão agora? Mensagem:");
+      const m = prompt("Consolidar as alterações agora? Mensagem:");
       if (m && m.trim()) {
         await api.versaoCommit(m.trim());
         await recarregar();
-        log("versão salva em " + nome.trim());
+        log("versão consolidada em " + nome.trim());
       }
     }
   } catch (err) { log(err.message, true); }
@@ -2307,7 +2362,7 @@ async function verCommit() {
   const m = prompt("Mensagem da versão:");
   if (m == null) return;
   if (!m.trim()) { log("mensagem obrigatória", true); return; }
-  try { await api.versaoCommit(m.trim()); await recarregar(); log("versão salva"); }
+  try { await api.versaoCommit(m.trim()); await recarregar(); log("versão consolidada"); }
   catch (err) { log(err.message, true); }
 }
 async function verNovaBranch() {
@@ -2338,7 +2393,7 @@ async function apagarBranch(nome, isCur) {
   if (g.protegidas.includes(nome)) { log(`"${nomeCenario(nome)}" é protegida`, true); return; }
   try {
     if (isCur) {
-      if (g.sujo) { log(`há alterações não salvas em "${nomeCenario(nome)}" — salve uma versão ou descarte antes`, true); return; }
+      if (g.sujo) { log(`há alterações não salvas em "${nomeCenario(nome)}" — consolide uma versão ou descarte antes`, true); return; }
       const destino = g.refs.map((r) => r.nome).filter((n) => n !== nome).concat("main")[0];
       await api.versaoCheckout(destino);
       await api.versaoDeletarBranch(nome);
@@ -2516,16 +2571,18 @@ function wire() {
 
   gridProj.addEventListener("click", (e) => onRowClick(e, "projeto"));
   gridRec.addEventListener("click", (e) => onRowClick(e, "recurso"));
-  // botão direito numa célula de horas (Por Projeto) -> ajuste rápido de alocação
-  // (normalizar / 100-75-50-25-0%). Age sobre a seleção inteira se a célula clicada
-  // estiver dentro dela (ver EG.cellsPara em grid-excel.js).
-  gridProj.addEventListener("contextmenu", (e) => {
+  // botão direito numa célula de horas (Por Projeto E Por Recurso) -> ajuste rápido de
+  // alocação (normalizar / 100-75-50-25-0%). Age sobre a seleção inteira se a célula
+  // clicada estiver dentro dela (ver EG.cellsPara em grid-excel.js).
+  const onCtxAloc = (e) => {
     const td = e.target.closest("td.cell.editable");
     if (!td) return;
     e.preventDefault();
     const cells = EXCEL && EXCEL.cellsPara(td);
     if (cells && cells.length) abrirAjusteAlocacao(cells, e);
-  });
+  };
+  gridProj.addEventListener("contextmenu", onCtxAloc);
+  gridRec.addEventListener("contextmenu", onCtxAloc);
   bindScrollSync(panelProj, panelRec);
 
   // ---- view Cadastros ----

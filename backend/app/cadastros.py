@@ -137,10 +137,11 @@ _PESSOA_EDITAVEL = {
     "tipo_contrato": str,
     "situacao": str,
     "fim_contrato": str,
+    "formacao": str,
 }
 _PESSOA_COLS = (
     "matricula, nome, carga_diaria, capacidade_mensal, ativo, area, tipo_contrato, "
-    "situacao, fim_contrato"
+    "situacao, fim_contrato, formacao"
 )
 
 

@@ -68,9 +68,9 @@ parênteses/tooltip, se útil):
 | Interface | Técnico |
 |---|---|
 | Versão | commit |
-| Salvar versão | ação de commit |
+| Consolidar alterações | ação de commit |
 | Cenário | branch criado pelo usuário |
-| Corrente | `main` |
+| Principal | `main` |
 | Publicado | branch `BI` |
 | Abrir cenário | checkout |
 | Incorporar cenário | merge |
@@ -514,35 +514,68 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## 12. Estado da implementação
 
+> Atualizada em 2026-09-12 — revisão de consolidação, não é um corte de release formal.
+
 | Módulo | Arquivo | Status |
 |--------|---------|--------|
-| Leitura de `.xlsx` | `backend/app/xlsx_io.py` | ✅ feito |
-| Esquema do banco | `backend/app/db.py` | ✅ feito |
-| Importação | `backend/app/xlsx_import.py` | ✅ feito (validado contra a amostra) |
-| Agregações + cor | `backend/app/aggregate.py` | ✅ feito |
-| Exportação cirúrgica | `backend/app/xlsx_export.py` | ✅ feito (valida no LibreOffice; roundtrip nos testes) |
-| Template derivado da amostra | `backend/app/templates.py` | ✅ feito |
-| API FastAPI | `backend/app/main.py` | ✅ feito |
-| Frontend (grades) | `frontend/` | ✅ feito (v1) |
-| Criar projeto | `POST /api/projetos` + `#dlg-novo` | ✅ feito |
-| Import do BI + custo | `backend/app/bi_import.py`, `GET /api/custo/projeto` | ✅ dados no banco (sem UI de custo ainda) |
-| Testes | `backend/tests/` | ✅ 14 passando |
+| Leitura/escrita cirúrgica de `.xlsx` | `xlsx_io.py`, `xlsx_export.py` | ✅ feito (roundtrip validado, LibreOffice) |
+| Esquema do banco | `db.py` | ✅ feito (`user_version = 2`, migrações idempotentes) |
+| Importação por projeto | `xlsx_import.py` | ✅ feito |
+| Import do BI (2 fases: relatório → confirmação), branch `BI` | `bi_import.py` | ✅ feito |
+| Agregações + cor + filtro de período | `aggregate.py` | ✅ feito |
+| Template derivado da amostra | `templates.py` | ✅ feito |
+| API FastAPI | `main.py` | ✅ feito |
+| Cadastros (projeto/pessoa/catálogo) | `cadastros.py` + aba Cadastros | ✅ feito |
+| Versionamento estilo Git (commit/branch/checkout/merge 3-way) | `versao.py` + tela Versões (grafo, diff) | ✅ feito (Fases 1–2 de `VERSIONAMENTO.md`) |
+| Terminologia da UI (Versão/Cenário/Principal/Publicado/Incorporar) | `docs/TERMINOLOGIA.md`, aplicado em `index.html`/`main.js` | ✅ feito |
+| Identidade (matrícula, `X-Autor`, seletor 1ª execução) + papel/apelido (`pessoa.papel`/`apelido`, fora do versionamento) | `docs/COLABORACAO.md`, `main.py`, `main.js` | ✅ identidade chega em todo o sistema; **enforcement da matriz de permissão NÃO implementado** (ver §14) |
+| Frontend (duas grades, edição estilo Excel, undo/redo, 3-pane shell, painel de custo) | `frontend/` | ✅ feito |
+| Custo por projeto (dado) | `bi_import.py`, `GET /api/custo/projeto` | ✅ dado no banco; sem UI dedicada de custo além do painel lateral |
+| Rascunho/edição concorrente multiusuário (overlay no cliente) | `docs/COLABORACAO.md` | ⬜ não implementado — hoje é 1 `working` compartilhado (ver Ripple em `COLABORACAO.md`) |
+| Testes | `backend/tests/` | ✅ 64 passando (só backend — sem infra de teste de frontend, ver §14) |
 
-**Como rodar:** `uvicorn --app-dir backend app.main:app --port 8731 --reload` → http://localhost:8731
+**Como rodar:** `./run.sh` (prod, porta 8731) ou `./run.sh dev` (porta 8732) — ver `CLAUDE.md`.
 
 ## 13. Decisões fechadas
 
 - Reimport de arquivo de projeto **atualiza o working** (baseline intacta); projeto novo
   cria + vira a baseline.
-- `tipo_alocacao` = catálogo fixo de `Planilha4`, não editável no v1.
-- Nome canônico da pessoa vem de `pessoa` no banco.
+- `tipo_alocacao` = catálogo fixo de `Planilha4`, não editável no v1. **Nunca chamado de
+  "equipe"** — `pessoa.equipe` é um conceito diferente (ver §1-A).
+- Nome canônico da pessoa vem de `pessoa` no banco; exibição de autor usa `nome_exibicao`
+  (apelido, senão 1º nome) — ver `docs/COLABORACAO.md`.
 - Linhas ordenadas alfabeticamente nas duas grades.
 - Template derivado do arquivo de amostra na 1ª execução.
-- `ID_Filial` = atributo do projeto, default 62, sem catálogo.
+- `ID_Filial` = atributo do projeto, default 62, sem catálogo. `mes_inicio`/`ano_inicio`
+  **removidos** de `projeto` (eram só parâmetro interno da planilha, não atributo do
+  projeto — o exportador deriva isso da janela de dados).
 - Strings no export vão como inline strings (não mexe em `sharedStrings.xml`).
+- Terminologia da UI segue `docs/TERMINOLOGIA.md` (Versão/Cenário/Principal/Publicado/
+  Incorporar); nomes técnicos internos (`main`, `commit`, `branch`) não mudam.
+- `pessoa.papel` e `pessoa.apelido` ficam **fora do sistema de versionamento** — gravam
+  direto, nunca entram em `chg_pessoa`/commit/merge (controle de acesso precisa ser
+  imediato). Matriz de papéis e pessoa reservada `SISTEMA` em `docs/COLABORACAO.md`.
+- **Filtro de período substitui "só ativos"** (§8): linha e coluna usam o mesmo critério
+  de janela — uma linha nunca fica invisível se tiver hora numa coluna visível (corrige o
+  bug de "total sem linha que explica", ver Histórico 2026-09-12).
+- Incorporar (`merge`) para `main`/Principal exige papel `coordenador`/`admin` — decidido,
+  **enforcement ainda não implementado** (ver §14).
 
 ## 14. Itens em aberto / a decidir com uso
 
+- **Enforcement da matriz de permissão (leitura/gp/coordenador/admin) não implementado.**
+  A identidade e o papel já chegam em todo o sistema (`usuario_atual`), mas nenhuma rota
+  bloqueia edição/custo por papel ainda, e não há UI pra promover o papel de outra pessoa.
+  Os 6 pontos de enforcement estão listados em `docs/COLABORACAO.md`.
+- **Rascunho/edição concorrente multiusuário** (overlay no cliente, autosave, 4 níveis de
+  fricção ao salvar) — desenhado em `docs/COLABORACAO.md`, schema parcial existe
+  (`usuario`/`rascunho`), mas nunca foi ligado no frontend. Hoje dois GPs editando ao mesmo
+  tempo compartilham o mesmo `working` ("last write wins").
+- **Import automático do BI** (conectado direto no banco de origem, sem upload manual) —
+  motivo de existir a pessoa reservada `SISTEMA`, mas o caminho em si não existe.
+- **Rótulo do usuário "Sistema" no seletor de identidade** — hoje aparece misturado com
+  pessoas de verdade, sem indicação visual de que é uma conta reservada (bootstrap /
+  autor de commit automático). Considerar marcá-lo ou deixá-lo por último na lista.
 - Descoberta de arquivos: só pasta, ou também seleção avulsa persistida?
 - Edição/CRUD da aba `Novos_Pesquisadores` na interface (form dedicado) — escopo do v1?
 - Exibir/editar anotações na grade (ícone de nota) — v1 ou depois?
@@ -560,6 +593,35 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-12** — **Ação de commit: "Salvar versão" → "Consolidar alterações".**
+  `docs/TERMINOLOGIA.md` §8.1/§19/§20 atualizados — "salvar" ficava ambíguo (as horas já
+  estão persistidas no banco antes do commit; "consolidar" comunica melhor que é um ponto
+  formal do histórico). Aplicado no botão principal da toolbar de Versões, no botão
+  alternativo que aparece quando a branch atual é protegida ("Salvar num cenário…" →
+  "Consolidar num cenário…"), no botão de confirmação do relatório do BI, no prompt que
+  pede a mensagem da versão, e nas mensagens de log logo após a ação ("versão salva" →
+  "versão consolidada"). **Não mexido**: "Alterações não salvas" (o estado de working
+  sujo) e "última versão salva" (nas telas de Descartar) continuam com "salvo/salva" — são
+  um par de termos deliberadamente ajustado antes (ver entrada de 2026-09-11) e o usuário
+  não pediu para reabrir essa escolha; fica registrado como tensão de vocabulário em aberto
+  (ação = "consolidar", mas o estado ainda descreve em termos de "salvo") até uma decisão
+  explícita.
+- **2026-09-12** — **Cadastros: campos de texto livre viram seleção onde já existe
+  catálogo/FK.** `matricula_gp` (Projeto) virou busca por nome (`<input list>` +
+  `<datalist>` de pessoas), resolvendo pra matrícula no salvar; a coluna derivada
+  "Gestor" ao lado atualiza sozinha, mesmo padrão do `id_status`→"Status". `area`,
+  `tipo_contrato` e a nova `formacao` (Pessoa) viraram `<select>` alimentado pelos
+  catálogos `area`/`contrato`/`ensino` — diferente do `id_status`, gravam o texto
+  direto, não um id. `situacao` também virou `<select>`; como o catálogo só tem
+  Desligado/Planejado, "Ativo" entra como opção explícita (era o padrão implícito).
+  `formacao` (`pessoa.formacao`, já existia no banco) passou a aparecer/ser editável no
+  Cadastros pela primeira vez. Sem mudança de schema.
+- **2026-09-12** — **Renomeado "Corrente" → "Principal"** (nome de UI do branch `main`,
+  docs/TERMINOLOGIA.md §9.1). Trocado por ser mais direto/claro. Atualizado em todo lugar
+  que gerava esse texto: `versao._nome_cenario` (mensagem automática de merge),
+  `main.js`'s `nomeCenario`/tooltip de branch protegida, o texto de ajuda do diálogo de
+  Arquivos (`index.html`), e a tabela de vocabulário (§ acima) — `main` continua o nome
+  técnico interno da ref, só o rótulo de UI mudou.
 - **2026-09-12** — **Cópia/cola estilo Excel estendida pra toda célula da grade + painel
   lateral.** Pedido: dava pra selecionar/copiar (Ctrl+C) só as células de hora editáveis
   (`td.cell.editable`) — coluna 1 (árvore), linhas de total (projeto/tipo/pessoa) e a linha

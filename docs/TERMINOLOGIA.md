@@ -109,9 +109,13 @@ aparece só entre parênteses, em tooltip, em ajuda técnica ou em documentaçã
 ## 8. Conceitos principais de versionamento
 
 ### 8.1 Versão
-Um **commit** é apresentado como **Versão**. A ação de commit é **Salvar versão** (nunca
-só "Salvar" — as alterações já podem estar persistidas no banco antes do commit). Pode
-aparecer como "Salvar versão (commit)" ou tooltip "Cria um commit no cenário atual."
+Um **commit** é apresentado como **Versão**. A ação de commit é **Consolidar alterações**
+(revisado em 2026-09-12 — era "Salvar versão"; "salvar" é ambíguo porque as alterações já
+estão persistidas no banco antes do commit, "consolidar" comunica melhor que é um ponto
+formal do histórico, não uma gravação de dado). Nunca voltar a usar "Salvar" sozinho pra
+essa ação. Pode aparecer como "Consolidar alterações (commit)" ou tooltip "Cria uma versão
+(commit) no cenário atual." O estado resultante é uma **versão consolidada** — evitar
+"versão salva" daqui em diante, é o mesmo problema de vocabulário.
 
 ### 8.2 Cenário
 Um **branch criado pelo usuário** é apresentado como **Cenário**. Ação: **Criar cenário**
@@ -128,16 +132,17 @@ Cenário
 ```
 (técnico: `branch → commit, commit, commit`.) **Cenário ≠ Versão.**
 
-## 9. Estados especiais: Corrente e Publicado
+## 9. Estados especiais: Principal e Publicado
 
 Os branches técnicos hoje chamados `main` e `BI` recebem nomes semânticos próprios — não
 são apresentados como cenários comuns.
 
-### 9.1 Corrente
-O antigo `main` é **Corrente** (nome completo: **Planejamento Corrente**) — estado vigente
-do planejamento dentro da ferramenta, com as alterações já incorporadas ao plano de
-trabalho. Não chamar de "Main", "Planejamento Oficial" ou "Principal" na UI. `main` pode
-continuar como nome interno da ref (ver §21).
+### 9.1 Principal
+O antigo `main` é **Principal** (nome completo: **Planejamento Principal**; revisado em
+2026-09-12 — era "Corrente", trocado por ser mais direto/claro) — estado vigente do
+planejamento dentro da ferramenta, com as alterações já incorporadas ao plano de trabalho.
+Não chamar de "Main", "Planejamento Oficial" ou "Corrente" na UI. `main` pode continuar
+como nome interno da ref (ver §21).
 
 ### 9.2 Publicado
 O branch hoje chamado `BI` é **Publicado** (nome completo: **Planejamento Publicado**) —
@@ -145,11 +150,11 @@ O branch hoje chamado `BI` é **Publicado** (nome completo: **Planejamento Publi
 "BI" como conceito semântico — BI é só a tecnologia/origem atual dos dados; o conceito
 continua válido mesmo se o sistema externo deixar de ser Power BI.
 
-## 10. Relação entre Corrente, Publicado e Cenários
+## 10. Relação entre Principal, Publicado e Cenários
 
 ```
 PLANEJAMENTO
-  Corrente
+  Principal
   Publicado
 
 CENÁRIOS
@@ -165,22 +170,22 @@ Não apresentar "branch main", "branch BI", "branch scenario-x" para usuários c
 ```
 Publicado
     ↓ atualização proveniente do sistema externo
-Corrente
+Principal
     ↓ edições e consolidações
-Corrente atualizado
+Principal atualizado
     ↓ exportação/publicação
 Publicado
 ```
 
-Cenários derivam do Corrente (`Corrente → Cenário A/B/C`); depois um cenário pode ser
-incorporado ao Corrente.
+Cenários derivam do Principal (`Principal → Cenário A/B/C`); depois um cenário pode ser
+incorporado ao Principal.
 
 ## 12. Merge → Incorporar cenário
 
 A operação técnica `merge` é **Incorporar cenário** (técnico: `merge`). Não usar
 "Mesclar" como primeira opção de linguagem — "Incorporar" comunica melhor o efeito
-gerencial. Tooltip opcional: "Incorpora as alterações deste cenário ao planejamento
-corrente (merge)."
+gerencial. Tooltip opcional: "Incorpora as alterações deste cenário ao Planejamento
+Principal (merge)."
 
 ## 13. Checkout → Abrir cenário
 
@@ -240,10 +245,10 @@ específica, preferir verbo explícito: "Atualizar dados", "Atualizar do sistema
 | `equipe` | Equipe organizacional |
 | `tipo_alocacao` | Tipo de alocação |
 | `branch` (do usuário) | Cenário |
-| `main` | Corrente |
+| `main` | Principal |
 | branch `BI` | Publicado |
 | `commit` | Versão |
-| ação de commit | Salvar versão |
+| ação de commit | Consolidar alterações |
 | `checkout` | Abrir cenário |
 | `merge` | Incorporar cenário |
 | merge conflict | Conflito de alterações |
@@ -264,7 +269,7 @@ Exemplos canônicos (toolbar da tela Versões — `frontend/index.html`):
 
 | Botão | Tooltip |
 |---|---|
-| Salvar versão… | Salva uma versão. (commit) |
+| Consolidar alterações… | Cria uma versão (commit) no cenário atual. |
 | Novo cenário… | Cria um novo cenário e já passa a trabalhar nele. (branch + switch) |
 | Incorporar… | Incorpora outro cenário ao atual. (merge) |
 | Descartar alterações | Descarta as alterações não salvas. Volta ao estado da última versão salva. (reset) |
@@ -286,7 +291,7 @@ houver risco elevado de regressão — a migração pode ser gradual. Prioridade
 ## 22. Regra de documentação
 
 A especificação viva (`docs/ESPECIFICACAO.md`, seção Vocabulário) registra explicitamente
-pelo menos: Pessoa, Recurso, Usuário, Equipe, Tipo de alocação, Alocação, Corrente,
+pelo menos: Pessoa, Recurso, Usuário, Equipe, Tipo de alocação, Alocação, Principal,
 Publicado, Cenário, Versão, Alterações não salvas, Incorporar cenário. Não introduzir novos
 termos concorrentes sem necessidade.
 
@@ -297,7 +302,7 @@ tempo, um usuário técnico familiarizado com Git reconhece imediatamente a corr
 da tabela do §19.
 
 ```
-Planejamento → Corrente / Publicado → Cenários → Versões → Incorporar
+Planejamento → Principal / Publicado → Cenários → Versões → Incorporar
 ```
 
 O modelo Git permanece como mecanismo técnico; a linguagem do usuário é a de cima.

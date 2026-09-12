@@ -100,6 +100,7 @@
         <table id="cad-tabela"><thead></thead><tbody></tbody></table>
         <div id="cad-catalogo" hidden></div>
       </div>
+      <datalist id="cad-pessoas-dl"></datalist>
     </section>
 
     <section id="view-ver" class="view" hidden>
@@ -107,7 +108,7 @@
         <span id="ver-cur" class="ver-cur"></span>
         <span class="tb-sep"></span>
         <div class="tb-group">
-          <button id="ver-commit" title="Salva uma versão. (commit)">✔&nbsp;Salvar versão…</button>
+          <button id="ver-commit" title="Cria uma versão (commit) no cenário atual.">✔&nbsp;Consolidar alterações…</button>
           <button id="ver-branch-novo" title="Cria um novo cenário e já passa a trabalhar nele. (branch + switch)">⑂&nbsp;Novo cenário…</button>
           <button id="ver-merge" title="Incorpora outro cenário ao atual. (merge)">⇄&nbsp;Incorporar…</button>
         </div>
@@ -191,7 +192,7 @@
     <section>
       <h4>Importar</h4>
       <p class="muted">
-        <b>Do BI:</b> vira uma versão no Publicado (e a Corrente acompanha, se ainda não tiver versão própria à frente).<br>
+        <b>Do BI:</b> vira uma versão no Publicado (e a Principal acompanha, se ainda não tiver versão própria à frente).<br>
         <b>Planilha de projeto:</b> entra como alteração não salva; você salva uma versão quando quiser.
       </p>
       <button id="arq-import-bi" class="primary">Importar do BI…</button>
@@ -214,7 +215,7 @@
   <div class="body" id="bi-relatorio-body"></div>
   <div class="actions">
     <button id="bi-relatorio-cancelar" value="cancel">Descartar</button>
-    <button class="primary" id="bi-relatorio-confirmar">Confirmar e salvar versão</button>
+    <button class="primary" id="bi-relatorio-confirmar">Confirmar e consolidar alterações</button>
   </div>
 </dialog>
 

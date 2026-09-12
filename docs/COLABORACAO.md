@@ -13,10 +13,14 @@
 > aposentar os endpoints de edição de célula, remover `head_`, revisar export/cache
 > (itens 5–7 da ordem de implementação).
 >
-> **2026-09-11 — identidade/papel de acesso decididos** (ver seção própria abaixo),
-> **nada implementado ainda**: substitui a tabela `usuario` daqui por `pessoa` + campo
-> `pessoa.papel` (fora do versionamento); matriz de 4 papéis; resolve o item 3 de "Em
-> aberto" (Corrente protegida = sim).
+> **2026-09-11 — identidade/papel de acesso decididos** (ver seção própria abaixo);
+> **implementado em 2026-09-12** (schema `pessoa.papel`/`pessoa.apelido`, pessoa reservada
+> `SISTEMA`, `usuario_atual` em `/api/estado`, seletor de 1ª execução, ícone de
+> Configurações, `X-Autor` ligado no `api.js`, 64 testes passando). Substitui a tabela
+> `usuario` daqui por `pessoa` + campo `pessoa.papel`; matriz de 4 papéis; resolve o item 3
+> de "Em aberto" (Principal protegida = sim). **Ainda não implementado:** o enforcement de
+> fato da matriz de permissão (nenhuma rota bloqueia por papel ainda) e UI pra promover o
+> papel de outra pessoa — ver "Superfície de enforcement" abaixo.
 
 ## Problema
 
@@ -108,11 +112,11 @@ chaves que mudaram no topo desde `base_commit_id`.
 |---|---|---|
 | **1** | topo == base | commita, `parent = base`. Nada a dizer. |
 | **2** | topo andou, `tocado ∩ entrou = ∅` | merge silencioso, `parent = topo`. Toast passivo: *"incorporei os commits #58–#60 de Maria e Pedro"*. |
-| **3** | `tocado ∩ entrou ≠ ∅`, mas `_merge3` resolve (sem conflito real) | **bloqueia** com um *digest* do que veio do outro lado (*"Maria mudou a capacidade do João; 2 alocações novas em BRAVO 2"*) → **Salvar assim / Cancelar**. Não é revisão célula a célula. |
+| **3** | `tocado ∩ entrou ≠ ∅`, mas `_merge3` resolve (sem conflito real) | **bloqueia** com um *digest* do que veio do outro lado (*"Maria mudou a capacidade do João; 2 alocações novas em BRAVO 2"*) → **Consolidar assim / Cancelar**. Não é revisão célula a célula. |
 | **4** | conflito real (mesma célula/campo, valores diferentes) | para; resolução célula a célula (`merge_conflito`, máquina da Fase 2); depois commita, `parent = topo`. |
 
 - **Preferência por usuário** (`usuario.sempre_revisar`, default `0`): quando ligada,
-  promove o nível 2 a também mostrar o digest com **Salvar assim / Cancelar**. Nível 1
+  promove o nível 2 a também mostrar o digest com **Consolidar assim / Cancelar**. Nível 1
   nunca pede nada.
 
 ### Descartar
@@ -188,7 +192,7 @@ ficar pendente de commit nem virar conflito de merge entre branches.
 
 ### Matriz de permissão
 
-| papel | edita alocações/projetos | custo totalizado (projeto/mês) | custo individual (valor_hora/remuneração) | incorporar → Corrente (merge main) | promove usuário |
+| papel | edita alocações/projetos | custo totalizado (projeto/mês) | custo individual (valor_hora/remuneração) | incorporar → Principal (merge main) | promove usuário |
 |---|---|---|---|---|---|
 | leitura | não | não | não | — | não |
 | gp | sim | sim | não | não (só cenário↔cenário) | não |
@@ -196,7 +200,7 @@ ficar pendente de commit nem virar conflito de merge entre branches.
 | admin | sim | sim | sim | sim | sim — inclusive promove outro admin |
 
 `admin` é superset de `coordenador`. Isso também fecha o item 3 de "Em aberto" abaixo:
-**Corrente (`main`) fica protegida** — incorporar exige `coordenador`/`admin`.
+**Principal (`main`) fica protegida** — incorporar exige `coordenador`/`admin`.
 
 ### Superfície de enforcement (nada implementado ainda)
 1. Toda rota mutante (alocação, projeto, pessoa, commit/branch/merge/descartar) bloqueada
@@ -205,7 +209,7 @@ ficar pendente de commit nem virar conflito de merge entre branches.
    `/api/estado`; vira condicional por papel.
 3. `cadastros.py` `editar_pessoa` — editar custo individual só `coordenador`/`admin`.
 4. Endpoint de custo por projeto (`GET /api/custo/projeto`) bloqueado pra `leitura`.
-5. `versao.merge`/commit pra `main` (Corrente) — gate por papel, além da proteção de branch
+5. `versao.merge`/commit pra `main` (Principal) — gate por papel, além da proteção de branch
    que já existe.
 6. Enforcement **precisa ser server-side** — `X-Autor` é auto-declarado/falsificável;
    esconder elemento na UI é só cosmético.
@@ -339,7 +343,7 @@ Não implementar a automação agora — só deixar a pessoa `SISTEMA` pronta pr
    Preferência `usuario.sempre_revisar` promove o nível 2 ao digest.
 2. Rascunho pode ser renomeado / ter mais de um por (autor, branch)? — hoje: **não**, um só.
 3. ~~`main` protegida contra `salvar` direto (forçar branch + merge)?~~ **Decidido
-   (2026-09-11):** sim — incorporar em Corrente (`main`) exige papel `coordenador`/`admin`.
+   (2026-09-11):** sim — incorporar em Principal (`main`) exige papel `coordenador`/`admin`.
    Ver seção "Identidade e papel de acesso" acima.
 4. Autossave: e se o `PUT` falhar (rede)? Cliente mantém em `localStorage` e re‑tenta;
    badge "não salvo" enquanto pendente.
@@ -354,8 +358,10 @@ Não implementar a automação agora — só deixar a pessoa `SISTEMA` pronta pr
 2. ✅ `GET/POST /api/usuarios`, `GET/PUT/DELETE /api/rascunho` (aceita `autor` no corpo ou
    header `X-Autor`).
 3. ⬜ Grade a partir de `materializar(ref tip)` + overlay do rascunho no cliente (mover o
-   cálculo de diff da tela para o cliente); autossave (debounce 3 s + `localStorage`);
-   `X-Autor` no `req()` da API.
+   cálculo de diff da tela para o cliente); autossave (debounce 3 s + `localStorage`).
+   (`X-Autor` no `req()` da API **já está feito** — ligado em 2026-09-12 junto com a
+   identidade/papel, ver seção própria acima — mas só resolve autoria, não o overlay de
+   rascunho em si, que continua pendente.)
 4. ✅ `POST /api/rascunho/commitar` — `versao.commitar_rascunho`: 3-way vs. tip, commit de
    1 pai, consome o rascunho, 4 níveis, `confirmar` p/ os níveis 2 (com `sempre_revisar`) e 3.
 5. ⬜ Aposentar os endpoints de edição de célula; remover `head_`.
