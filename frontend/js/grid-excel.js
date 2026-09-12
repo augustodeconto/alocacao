@@ -2,6 +2,15 @@
 // teclado, digitar/F2 para editar, Enter/Tab, Delete zera, arrastar seleciona,
 // alça de preenchimento, Ctrl+C / Ctrl+V.
 //
+// A seleção cobre TODA célula da grade — coluna 1 (árvore: projeto/tipo/pessoa),
+// linhas de total (projeto/tipo/pessoa, não editáveis) e linhas "+ adicionar..."
+// (células vazias, sem alocação) — não só as células de hora editáveis. Isso permite
+// arrastar um bloco retangular que atravesse tudo (ex.: um projeto inteiro, com seus
+// grupos e a linha "+ adicionar pessoa" no meio) e copiar pro Excel de uma vez. Só o
+// destino de edição/paste/delete/preenchimento continua restrito às células
+// realmente editáveis (`td.cell.editable`); as demais entram na seleção/cópia como
+// texto (ou em branco, nas linhas "+ adicionar...") mas ignoram escrita.
+//
 // hooks = {
 //   periodos: () => string[],                       // PERIODOS atual
 //   batch:   async (edits) => void,                 // [{alocacaoId, periodo, valor}]
@@ -17,21 +26,47 @@ export function initExcel(grids, hooks) {
   document.addEventListener("paste", (e) => focused && focused.onPaste(e));
   document.addEventListener("mousemove", (e) => focused && focused.onMove(e));
   document.addEventListener("mouseup", () => insts.forEach((i) => i.endDrag()));
-  return { rebuild: () => insts.forEach((i) => i.rebuild()) };
+  return {
+    rebuild: () => insts.forEach((i) => i.rebuild()),
+    // pra menu de contexto (botão direito): célula clicada dentro da seleção atual ->
+    // toda a seleção; fora dela (ou sem seleção) -> só aquela célula (e a seleção
+    // pula pra ela, igual o Excel faz). Só devolve células de hora editáveis — o
+    // menu de ajuste rápido de alocação não faz sentido em coluna 1 / total / addrow.
+    cellsPara: (td) => {
+      const inst = insts.find((i) => i.grid.contains(td));
+      return inst ? inst.cellsPara(td) : null;
+    },
+  };
 }
 
+// Primeiro nó de texto direto (não-vazio) do td — ignora ícones/badges (elementos)
+// e o "twin" (%/horas pequeno, que fica dentro de um <span> filho, não é filho de
+// texto direto do td). Funciona tanto pra células de hora (ícone opcional + número)
+// quanto pra coluna 1 (toggle ▸/▾ opcional + nome) quanto pra totais (só o número).
 function cellText(td) {
-  const n = td && td.firstChild;
-  return n && n.nodeType === 3 ? n.textContent.trim() : "";
+  if (!td) return "";
+  for (const n of td.childNodes) {
+    if (n.nodeType === 3 && n.textContent.trim()) return n.textContent.trim();
+  }
+  return "";
+}
+
+// nível de indentação da coluna 1, a partir da classe indN do treeCell/addRowEscolha
+// (ind0 = projeto/pessoa, ind1 = tipo/projeto, ind2 = pessoa). Usado só quando a
+// própria coluna 1 é copiada, pra levar uma pista hierárquica sem quebrar o
+// alinhamento das colunas de mês (por isso espaços, não tab — tab abriria coluna
+// nova no Excel).
+function nivelDe(label) {
+  const m = label && label.className.match(/ind(\d)/);
+  return m ? Number(m[1]) : 0;
 }
 
 class EG {
   constructor(grid, hooks) {
     this.grid = grid;
     this.hooks = hooks;
-    this.matrix = [];   // matrix[r][c] = <td> | null
-    this.meta = [];      // meta[r] = alocacaoId
-    this.sel = null;     // { r, c, ar, ac }
+    this.rows = [];      // rows[r] = { label: <td>, cells: [<td>|null...], meta: alocacaoId|null }
+    this.sel = null;     // { r, c, ar, ac } — c=0 é a coluna 1 (árvore); c>=1 são os meses (c-1 no array `periodos`)
     this.drag = null;    // 'range' | 'fill'
     this.fillTarget = null;
     this.handle = document.createElement("div");
@@ -42,25 +77,25 @@ class EG {
 
   rebuild() {
     const per = this.hooks.periodos();
-    this.matrix = [];
-    this.meta = [];
+    this.rows = [];
     for (const tr of this.grid.querySelectorAll("tbody tr")) {
-      const aloc = tr.dataset.alocacaoId;
-      if (!aloc) continue;
-      const eds = tr.querySelectorAll("td.cell.editable");
-      if (!eds.length) continue;
-      const r = this.matrix.length;
-      const row = new Array(per.length).fill(null);
-      eds.forEach((td) => {
-        const c = per.indexOf(td.dataset.per);
-        if (c >= 0) { row[c] = td; td._rc = [r, c]; }
-      });
-      this.matrix.push(row);
-      this.meta.push(aloc);
+      const label = tr.querySelector("td.treecol");
+      if (!label) continue;
+      const cells = new Array(per.length).fill(null);
+      for (const td of tr.querySelectorAll("td.month")) {
+        const p = td.dataset.per;
+        if (!p) continue;
+        const c = per.indexOf(p);
+        if (c >= 0) cells[c] = td;
+      }
+      const r = this.rows.length;
+      label._rc = [r, 0];
+      cells.forEach((td, c) => { if (td) td._rc = [r, c + 1]; });
+      this.rows.push({ label, cells, meta: tr.dataset.alocacaoId || null });
     }
     if (this.sel) {
-      const R = this.matrix.length;
-      const C = per.length;
+      const R = this.rows.length;
+      const C = per.length + 1;
       if (!R || !C) this.sel = null;
       else {
         for (const k of ["r", "ar"]) this.sel[k] = Math.min(Math.max(0, this.sel[k]), R - 1);
@@ -70,11 +105,38 @@ class EG {
     this.paint();
   }
 
-  cellAt(r, c) { return (this.matrix[r] || [])[c] || null; }
+  cellAt(r, c) {
+    const row = this.rows[r];
+    if (!row) return null;
+    return c === 0 ? row.label : (row.cells[c - 1] || null);
+  }
+  isEditable(r, c) {
+    if (c === 0) return false;
+    const td = this.cellAt(r, c);
+    return !!td && td.classList.contains("editable");
+  }
   focus() { focused = this; }
 
+  cellsPara(td) {
+    if (!td._rc) return null;
+    const [r, c] = td._rc;
+    let dentro = false;
+    if (this.sel) {
+      const rect = this.rect();
+      dentro = r >= rect.r0 && r <= rect.r1 && c >= rect.c0 && c <= rect.c1;
+    }
+    if (!dentro) { this.sel = { r, c, ar: r, ac: c }; this.paint(); }
+    const { r0, r1, c0, c1 } = this.rect();
+    const per = this.hooks.periodos();
+    const cells = [];
+    for (let rr = r0; rr <= r1; rr++)
+      for (let cc = Math.max(1, c0); cc <= c1; cc++)
+        if (this.isEditable(rr, cc) && this.rows[rr].meta) cells.push({ alocacaoId: this.rows[rr].meta, periodo: per[cc - 1] });
+    return cells;
+  }
+
   editActive(initial) {
-    if (!this.sel) return;
+    if (!this.sel || !this.isEditable(this.sel.r, this.sel.c)) return;
     const td = this.cellAt(this.sel.r, this.sel.c);
     if (td) this.hooks.edit(td, { initial, after: (dir) => this.move(...(dir || [1, 0]), false) });
   }
@@ -98,7 +160,13 @@ class EG {
         if (td) td.classList.add("sel-range");
       }
     const act = this.cellAt(this.sel.r, this.sel.c);
-    if (act) { act.classList.add("sel-active"); act.appendChild(this.handle); }
+    // a alça de preenchimento só faz sentido a partir de uma célula editável — nas
+    // demais (coluna 1, totais, addrow) a seleção existe (pra copiar) mas não preenche.
+    if (act) {
+      act.classList.add("sel-active");
+      if (this.isEditable(this.sel.r, this.sel.c)) act.appendChild(this.handle);
+      else this.handle.remove();
+    }
     if (fillPreview && this.fillTarget) {
       const [tr, tc] = this.fillTarget;
       const a = Math.min(this.sel.r, tr), b = Math.max(this.sel.r, tr);
@@ -114,7 +182,7 @@ class EG {
   move(dr, dc, extend) {
     if (!this.sel) return;
     const per = this.hooks.periodos();
-    const R = this.matrix.length, C = per.length;
+    const R = this.rows.length, C = per.length + 1;
     let r = this.sel.r, c = this.sel.c;
     for (let step = 0; step < Math.max(R, C); step++) {
       const nr = Math.max(0, Math.min(R - 1, r + dr));
@@ -131,9 +199,13 @@ class EG {
 
   onDown(e) {
     if (e.button !== 0) return;
+    // toggle de expandir/recolher, ações da linha (remover/restaurar/mudar tipo) e o
+    // <select> inline de "+ adicionar..." têm que continuar recebendo o clique deles
+    // sozinhos — não iniciar seleção de célula por cima.
+    if (e.target.closest(".tw-toggle, .rowacts, select")) return;
     this.focus();   // qualquer clique na grade -> foco de teclado nela
     if (e.target.closest(".fill-handle")) { this.drag = "fill"; e.preventDefault(); return; }
-    const td = e.target.closest("td.cell.editable");
+    const td = e.target.closest("td.treecol, td.month");
     if (!td || !td._rc) return;
     const [r, c] = td._rc;
     if (e.shiftKey && this.sel) { this.sel.r = r; this.sel.c = c; }
@@ -146,11 +218,11 @@ class EG {
   onMove(e) {
     if (this.drag !== "range" && this.drag !== "fill") return;
     const at = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = at && at.closest && at.closest("td.cell.editable");
+    const cell = at && at.closest && at.closest("td.treecol, td.month");
     if (!cell || !cell._rc || cell.closest("table") !== this.grid) return;
     const [r, c] = cell._rc;
     if (this.drag === "range") { this.sel.r = r; this.sel.c = c; this.paint(); }
-    else { this.fillTarget = [r, c]; this.paint(true); }
+    else if (this.isEditable(r, c)) { this.fillTarget = [r, c]; this.paint(true); }
   }
 
   endDrag() {
@@ -171,7 +243,7 @@ class EG {
   onKey(e) {
     if (document.activeElement && document.activeElement.tagName === "INPUT") return;
     if (!this.sel) {
-      if (!this.matrix.length) return;
+      if (!this.rows.length) return;
       this.sel = { r: 0, c: 0, ar: 0, ac: 0 };
     }
     const nav = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
@@ -182,6 +254,7 @@ class EG {
     if (k === "Delete" || k === "Backspace") { e.preventDefault(); this.zero(); return; }
     if (k === "F2") { e.preventDefault(); this.editActive(); return; }
     if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!this.isEditable(this.sel.r, this.sel.c)) return;
       e.preventDefault();
       this.editActive(k);
     }
@@ -192,7 +265,13 @@ class EG {
     const out = [];
     for (let r = r0; r <= r1; r++) {
       const line = [];
-      for (let c = c0; c <= c1; c++) line.push(cellText(this.cellAt(r, c)));
+      for (let c = c0; c <= c1; c++) {
+        let txt = cellText(this.cellAt(r, c));
+        // recuo hierárquico (espaços, não tab) só quando a própria coluna 1 é a
+        // borda esquerda da seleção — não bagunça o alinhamento das colunas de mês.
+        if (c === 0 && c0 === 0 && txt) txt = "  ".repeat(nivelDe(this.rows[r].label)) + txt;
+        line.push(txt);
+      }
       out.push(line);
     }
     return out;
@@ -200,6 +279,11 @@ class EG {
 
   onCopy(e) {
     if (!this.sel) return;
+    // se existe uma seleção de TEXTO nativa (o usuário arrastou o mouse fora da
+    // grade, ex. no painel lateral) e ela não está dentro desta grade, deixa quieto
+    // — outro handler (o do painel) ou o Ctrl+C padrão do navegador que cuide dela.
+    const dom = window.getSelection();
+    if (dom && !dom.isCollapsed && dom.rangeCount && !this.grid.contains(dom.getRangeAt(0).commonAncestorContainer)) return;
     e.preventDefault();
     e.clipboardData.setData("text/plain", this.values().map((l) => l.join("\t")).join("\n"));
   }
@@ -215,7 +299,8 @@ class EG {
     const sw = Math.max(1, ...src.map((r) => r.length));
 
     // destino: a seleção. Se ela for maior que o bloco, o bloco é ladrilhado
-    // (1 célula -> preenche tudo; bloco 3x1 -> repete em cada coluna).
+    // (1 célula -> preenche tudo; bloco 3x1 -> repete em cada coluna). Só grava nas
+    // células realmente editáveis do destino — coluna 1 / totais / addrow ignoram.
     const { r0, r1, c0, c1 } = this.rect();
     const dh = Math.max(r1 - r0 + 1, sh);
     const dw = Math.max(c1 - c0 + 1, sw);
@@ -223,10 +308,10 @@ class EG {
     const edits = [];
     for (let i = 0; i < dh; i++)
       for (let j = 0; j < dw; j++) {
-        const r = r0 + i, c = c0 + j;
-        if (!this.cellAt(r, c)) continue;
+        const r = r0 + i, c = Math.max(1, c0) + j;
+        if (!this.isEditable(r, c)) continue;
         const val = (src[i % sh][j % sw] ?? "").trim();
-        edits.push({ alocacao_id: this.meta[r], periodo: per[c], valor: val });
+        edits.push({ alocacao_id: this.rows[r].meta, periodo: per[c - 1], valor: val });
       }
     if (edits.length) {
       this.sel = { r: r0, c: c0, ar: r0 + dh - 1, ac: c0 + dw - 1 };
@@ -240,12 +325,13 @@ class EG {
     const edits = [];
     for (let r = r0; r <= r1; r++)
       for (let c = c0; c <= c1; c++)
-        if (this.cellAt(r, c)) edits.push({ alocacao_id: this.meta[r], periodo: per[c], valor: "0" });
+        if (this.isEditable(r, c)) edits.push({ alocacao_id: this.rows[r].meta, periodo: per[c - 1], valor: "0" });
     if (edits.length) this.hooks.batch(edits);
   }
 
   doFill(target) {
     const [tr, tc] = target;
+    if (!this.isEditable(this.sel.r, this.sel.c)) return;
     const src = this.cellAt(this.sel.r, this.sel.c);
     if (!src) return;
     const val = cellText(src);
@@ -256,7 +342,7 @@ class EG {
     for (let r = a; r <= b; r++)
       for (let c = d; c <= f; c++) {
         if (r === this.sel.r && c === this.sel.c) continue;
-        if (this.cellAt(r, c)) edits.push({ alocacao_id: this.meta[r], periodo: per[c], valor: val });
+        if (this.isEditable(r, c)) edits.push({ alocacao_id: this.rows[r].meta, periodo: per[c - 1], valor: val });
       }
     if (edits.length) {
       this.sel = { r: a, c: d, ar: b, ac: f };

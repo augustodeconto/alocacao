@@ -4,9 +4,33 @@ const AUTOR_KEY = "alocacao.autor";
 export const getAutor = () => localStorage.getItem(AUTOR_KEY) || "";
 export const setAutor = (matricula) => localStorage.setItem(AUTOR_KEY, matricula || "");
 
+// filtro de período da tela (docs/ESPECIFICACAO.md §8) — "" = deixa o servidor decidir
+// o padrão (período inicial = mês atual; período final = aberto). Mandado em toda
+// chamada, não só GET /api/estado, senão a grade embutida na resposta de qualquer
+// edição voltaria pro padrão a cada ação.
+const PERIODO_INICIAL_KEY = "alocacao.periodoInicial";
+const PERIODO_FINAL_KEY = "alocacao.periodoFinal";
+// desligado = mostra tudo, sem corte nenhum (nem período inicial) — estado diferente de
+// "ainda não configurado" (que cai no padrão de hoje). Default true (filtro ligado).
+const PERIODO_ATIVO_KEY = "alocacao.periodoAtivo";
+export const getPeriodoInicial = () => localStorage.getItem(PERIODO_INICIAL_KEY) || "";
+export const setPeriodoInicial = (p) => localStorage.setItem(PERIODO_INICIAL_KEY, p || "");
+export const getPeriodoFinal = () => localStorage.getItem(PERIODO_FINAL_KEY) || "";
+export const setPeriodoFinal = (p) => localStorage.setItem(PERIODO_FINAL_KEY, p || "");
+export const getPeriodoAtivo = () => localStorage.getItem(PERIODO_ATIVO_KEY) !== "0";
+export const setPeriodoAtivo = (ativo) => localStorage.setItem(PERIODO_ATIVO_KEY, ativo ? "1" : "0");
+
 function _autorHeaders(headers) {
   const a = getAutor();
   if (a) headers["X-Autor"] = a;
+  if (!getPeriodoAtivo()) {
+    headers["X-Periodo-Ativo"] = "0";
+    return headers;
+  }
+  const pi = getPeriodoInicial();
+  if (pi) headers["X-Periodo-Inicial"] = pi;
+  const pf = getPeriodoFinal();
+  if (pf) headers["X-Periodo-Final"] = pf;
   return headers;
 }
 

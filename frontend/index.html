@@ -45,12 +45,12 @@
           <select id="gp-filter" title="filtrar projetos por Gestor de Projetos">
             <option value="">Todos os GPs</option>
           </select>
-          <button id="btn-showall" title="mostrar também projetos/pessoas sem alocação futura">só ativos</button>
         </div>
         <span class="tb-sep"></span>
         <div class="tb-group">
           <button id="btn-unidade">Exibir: Horas</button>
           <button id="btn-hoje" class="mini" title="rolar até o mês atual">⊙ hoje</button>
+          <button id="btn-periodo" class="mini" title="filtrar os meses exibidos por período">Período ▾</button>
         </div>
         <span class="tb-spacer"></span>
         <span class="status" id="proj-status"></span>
@@ -154,7 +154,7 @@
     <label>Id_projeto</label><input id="np-id" />
     <label>Nome</label><input id="np-nome" />
     <label>Empresa</label><input id="np-empresa" />
-    <label>Status</label><input id="np-status" />
+    <label>Status</label><select id="np-status"></select>
     <label>Matrícula GP</label><input id="np-gp" />
     <label>ID Filial</label><input id="np-filial" type="number" value="62" />
   </div>
@@ -173,12 +173,15 @@
   </div>
 </dialog>
 
-<dialog id="dlg-aloc">
-  <h3>Adicionar alocação</h3>
-  <div class="body" id="da-body"></div>
+<dialog id="dlg-tipo">
+  <h3>Tipo de alocação</h3>
+  <div class="body">
+    <label>Tipo</label>
+    <select id="tipo-sel"></select>
+  </div>
   <div class="actions">
     <button value="cancel">Cancelar</button>
-    <button class="primary" id="da-ok">Adicionar</button>
+    <button class="primary" id="tipo-ok">Adicionar</button>
   </div>
 </dialog>
 
@@ -216,6 +219,18 @@
 </dialog>
 
 <div id="ver-ctx" class="ver-ctx" hidden></div>
+<div id="aloc-ctx" class="aloc-ctx" hidden></div>
+<div id="periodo-ctx" class="periodo-ctx" hidden>
+  <label class="periodo-check">
+    <input type="checkbox" id="periodo-ativo-chk" />
+    Filtrar por período
+  </label>
+  <div class="periodo-campos">
+    <label>De <input type="month" id="periodo-inicial-inp" /></label>
+    <label>Até <input type="month" id="periodo-final-inp" /></label>
+  </div>
+  <div class="periodo-hint">"Até" em branco = sem limite (mostra até o último mês com dado).</div>
+</div>
 
 <dialog id="dlg-delbranch">
   <h3>Apagar cenário</h3>
@@ -232,7 +247,7 @@
   <h3>Quem é você?</h3>
   <div class="body" style="display:block">
     <input id="usr-busca" type="search" placeholder="buscar por nome ou matrícula…" style="width:100%;box-sizing:border-box;margin-bottom:8px;" />
-    <div id="usr-lista" class="usr-lista"></div>
+    <div id="usr-lista" class="pick-lista"></div>
   </div>
   <div class="actions">
     <button value="cancel" id="usr-cancelar">Cancelar</button>

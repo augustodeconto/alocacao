@@ -43,6 +43,20 @@ def test_papel_apelido_fora_do_versionamento(conn):
     assert "apelido" not in versao.PESSOA_COLS
 
 
+# -- catálogo: fixo, tem que existir mesmo num banco só de BI (BI nunca escreve nele) --
+def test_catalogo_padrao_semeado_na_migracao(conn):
+    n = conn.execute("SELECT COUNT(*) c FROM catalogo").fetchone()["c"]
+    assert n == len(dbmod._CATALOGO_PADRAO)
+    for tipo in ("area", "ativo", "contrato", "ensino", "equipe", "status", "tipo_alocacao"):
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM catalogo WHERE tipo=?", (tipo,)).fetchone()["c"] > 0
+
+    # roda de novo — INSERT OR IGNORE, não duplica (PK é tipo+texto)
+    dbmod._migrate(conn)
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) c FROM catalogo").fetchone()["c"] == n
+
+
 # -- 2. usuario_atual em /api/estado -------------------------------------------------
 def test_usuario_atual_reflete_x_autor(conn):
     conn.execute(

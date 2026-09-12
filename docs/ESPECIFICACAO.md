@@ -347,10 +347,33 @@ nome do projeto (depois `tipo_alocacao`). `tipo_alocacao` vem do catálogo fixo 
 ### Filtros da tela
 - **Por GP:** dropdown na toolbar (distintos de `projeto.gestor_projetos`). Filtra as
   duas grades.
-- **"só ativos" (padrão):** só mostra projeto/pessoa com **hora alocada em mês ≥ hoje**
-  (`tem_futuro`; projeto criado na ferramenta também conta). Botão alterna p/ "todos"
-  (revela encerrados + histórico). `status = Encerrado` → item marcado "(encerrado)" em
-  itálico. Ambos combinam.
+- **Filtro de período (substitui "só ativos" — corrigido em 2026-09-12, ver Histórico):**
+  um seletor de **período inicial** (padrão = mês atual) e, opcionalmente, **período
+  final** (padrão **aberto** — vai até o último mês com dado; nunca usar sentinela tipo
+  `9999-12` pra simular "aberto", é `NULL`/ausente mesmo). Só as colunas de mês dentro de
+  `[período inicial, período final]` aparecem na grade.
+  - **Visibilidade de linha (projeto / pessoa / alocação) segue o mesmo critério das
+    colunas**: aparece se tiver **qualquer hora dentro da janela visível**. Projeto criado
+    na ferramenta aparece mesmo sem hora (pra poder começar a alocar). Isso substitui o
+    antigo `tem_futuro`/`tem_horas_futuras` (que decidia "mostro em qualquer mês?" com um
+    critério só sobre o futuro, escondendo a linha inteira mesmo em meses passados onde
+    ela tinha dado real — ver bug 2026-09-12 no Histórico).
+  - **Nunca esconder dado que explica um total já mostrado.** Como coluna e linha usam o
+    mesmo critério de janela, uma alocação só pode ficar de fora se **nenhuma coluna
+    visível** tem hora dela — logo nunca existe uma coluna visível cujo total inclua uma
+    linha invisível.
+  - `status = Encerrado` → item marcado "(encerrado)" em itálico (rótulo, não filtro).
+  - **Filtro por "ativo"/situação da pessoa continua existindo, mas só em telas de
+    busca/seleção** (ex.: autocomplete de "+ adicionar pessoa"/"+ adicionar alocação") —
+    nunca pra esconder linha já presente na grade principal.
+  - Botão **"Hoje"** continua existindo, mas agora é **só atalho de rolagem** (posiciona
+    a coluna do mês atual à esquerda) — não é mais parte do critério de filtro.
+  - **Controles na toolbar, ao lado do "Hoje"**: um botão/dropdown pra abrir os dois
+    seletores (período inicial e período final) e **uma opção pra desabilitar o filtro**
+    — desligado = mostra tudo, equivalente a período inicial aberto também (volta ao
+    `periodos_union` completo, sem corte nenhum). É o mesmo lugar/gesto que hoje abre a
+    troca entre "só ativos"/"todos", só que agora configura datas em vez de alternar um
+    booleano.
 
 ### Grade "Por Projeto" — 3 níveis
 - Nível 0: **projeto**. Total do mês (leitura, negrito).
@@ -377,21 +400,36 @@ nome do projeto (depois `tipo_alocacao`). `tipo_alocacao` vem do catálogo fixo 
 
 ## 9-A. Edição estilo Excel (`frontend/js/grid-excel.js`)
 
-Camada de planilha sobre as células editáveis das duas grades:
+Camada de planilha sobre as duas grades. A **seleção cobre toda e qualquer célula** —
+coluna 1 (árvore: projeto/tipo/pessoa), linhas de total (projeto/tipo/pessoa) e linhas
+"+ adicionar..." (uma `<td>` vazia por mês, não um `colspan`) — não só as células de hora
+editáveis; isso permite arrastar um bloco retangular que atravesse tudo (ex.: um projeto
+inteiro, grupos e a linha "+ adicionar pessoa" no meio) e copiar de uma vez. Só o
+**destino de edição** (digitar/F2/preenchimento/colar/Delete) continua restrito às
+células de hora realmente editáveis — nas demais a seleção existe só para copiar.
 - **Clique = seleciona** a célula (não edita). Bloco: clique+arraste ou Shift+clique.
-- **Setas / Tab / Enter** navegam entre células (pulam meses fora da janela).
-- **Digitar** um caractere, **F2** ou **duplo-clique** abre a edição; `Enter`/`Tab` confirmam
-  e andam; `Esc` cancela.
-- **Delete/Backspace** zera a seleção.
-- **Alça de preenchimento** (quadradinho azul no canto da célula ativa): arrasta para
-  copiar o valor pela linha/coluna/bloco.
-- **Ctrl+C / Ctrl+V**: copia/cola como TSV (troca dados com o Excel). O **destino é a
-  seleção**: se maior que o bloco copiado, o bloco é **ladrilhado** (1 célula → preenche
-  tudo; bloco 3×1 → repete em cada coluna do bloco selecionado).
+- **Setas / Tab / Enter** navegam entre células (qualquer uma, não só as editáveis).
+- **Digitar** um caractere, **F2** ou **duplo-clique** abre a edição (só em célula de hora
+  editável); `Enter`/`Tab` confirmam e andam; `Esc` cancela.
+- **Delete/Backspace** zera as células editáveis da seleção (ignora as demais).
+- **Alça de preenchimento** (quadradinho azul no canto da célula ativa, só aparece numa
+  célula editável): arrasta para copiar o valor pela linha/coluna/bloco.
+- **Ctrl+C / Ctrl+V**: copia/cola como TSV (troca dados com o Excel), sem "h"/"%" nem
+  formatação — só o número. O **destino do colar é a seleção**: se maior que o bloco
+  copiado, o bloco é **ladrilhado** (1 célula → preenche tudo; bloco 3×1 → repete em cada
+  coluna do bloco selecionado); só grava nas células editáveis do destino. Copiar a
+  **coluna 1** junto (quando ela é a borda esquerda do bloco) leva o nome com um recuo de
+  2 espaços por nível de hierarquia (projeto → tipo → pessoa), não um tab (que abriria
+  coluna nova no Excel e desalinharia os meses).
 - Escritas múltiplas (arrastar/colar) vão num só request: `PUT /api/alocacao/mes-lote`.
 - **Undo/Redo** (`Ctrl+Z` / `Ctrl+Y`, botões `↶ ↷`): pilha no cliente que guarda o valor
   anterior das células de cada edição (editar/arrastar/colar/Delete) e reaplica via lote.
   Até 100 passos; ações estruturais (add/remover/mudar tipo) não entram.
+- **Painel lateral** (resumo de custo/pessoa, `#sec-body`): os trechos tabelados (KPIs,
+  legenda, barras de custo/mês, principais projetos, alocação mês a mês) também aceitam
+  selecionar com o mouse e `Ctrl+C` — copia como TSV (mesma regra: números puros, sem
+  unidade), reconstruído a partir de marcações `data-copy-row`/`data-copy-cell` no HTML,
+  não da seleção de texto bruta.
 
 ### Grade "Por Recurso"
 - Nível 0: **pessoa**. Célula do mês = **total da pessoa** (todos projetos/tipos),
@@ -522,6 +560,175 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-12** — **Cópia/cola estilo Excel estendida pra toda célula da grade + painel
+  lateral.** Pedido: dava pra selecionar/copiar (Ctrl+C) só as células de hora editáveis
+  (`td.cell.editable`) — coluna 1 (árvore), linhas de total (projeto/tipo/pessoa) e a linha
+  "+ adicionar..." (que nem tinha `<td>` por mês, era um `colspan` só) ficavam fora, então
+  não dava pra arrastar uma seleção que atravessasse um projeto inteiro. `grid-excel.js`
+  reescrito: o modelo de linhas passou a incluir TODA `<tr>` do `tbody` (não só as com
+  `alocacao_id`) e toda célula de mês ganhou `data-per` (antes só as editáveis tinham);
+  "+ adicionar..." ganhou uma `<td class="month addfill" data-per="...">` por mês em vez do
+  `colspan`. Seleção/navegação/cópia agora cobrem qualquer célula; edição, Delete,
+  preenchimento e o destino do colar continuam restritos às células de hora editáveis
+  (as demais entram na seleção só pra copiar, em branco quando vazias). Copiar a coluna 1
+  junto (quando é a borda esquerda do bloco) leva o nome com recuo de 2 espaços por nível
+  de hierarquia (não tab, que abriria coluna nova no Excel). Corrigido também um bug em
+  `cellText()` que lia só o primeiro filho do `<td>` como texto — numa célula com ícone de
+  sub/superalocação o primeiro filho é o ícone (elemento, não texto), então a cópia saía
+  vazia; agora procura o primeiro nó de texto direto, ignorando ícone e o "twin" (%/horas
+  pequeno). Além disso, o **painel lateral** (resumo de custo/pessoa) passou a aceitar
+  selecionar com o mouse + `Ctrl+C` nos trechos tabelados (KPIs, legenda, barras de
+  custo/mês, principais projetos, alocação mês a mês), reconstruindo TSV a partir de
+  marcações `data-copy-row`/`data-copy-cell`/`data-copy-value` no HTML (o valor copiado é
+  sempre o número puro, sem `R$`/"h"/"%"/separador de milhar). Ver §9-A.
+- **2026-09-12** — **Bug encontrado e critério de "só ativos" corrigido para filtro de
+  período.** Achado: total de um mês passado na grade "Por Recurso" incluía horas de uma
+  alocação (projeto "Férias Bolsa/estagio", 64h em 12/2025) que ficava **invisível** —
+  `tem_horas_futuras`/"só ativos" escondia a linha inteira por não ter hora ≥ mês atual,
+  mesmo tendo hora real no mês exibido. Não era dado corrompido nem falha de importação
+  (confirmado consultando o banco); era o critério de filtro mal desenhado — 304 linhas /
+  109 pessoas no banco atual têm esse mesmo padrão (hora só no passado). Correção de
+  critério (ver §8 "Filtros da tela"): "só ativos" (cutoff fixo em hoje, escondia linha
+  inteira) → **filtro de período** (período inicial, padrão hoje; período final opcional,
+  padrão aberto — sem sentinela tipo 9999-12). Linha e coluna passam a usar o **mesmo**
+  critério de janela — uma linha só fica de fora se nenhuma coluna visível tiver hora
+  dela, então never mais existe total visível sem a linha que o explica. Filtro por
+  situação/ativo da pessoa continua existindo, mas só em telas de busca/seleção, nunca pra
+  esconder linha já presente na grade principal. Botão "Hoje" vira puro atalho de rolagem.
+- **2026-09-12** — **Filtro de período implementado.** `aggregate.build_grade` ganhou
+  `periodo_inicial`/`periodo_final`/`periodo_ativo`; `_visivel_no_periodo` substitui o
+  antigo `_fut` e é usado no mesmo critério pra linha (`tem_horas_no_periodo` no leaf,
+  `visivel_no_periodo` em projeto/pessoa) e pra coluna (`periodos_union` recortada pela
+  janela). `periodo_ativo=False` é um terceiro estado à parte de "não configurado" —
+  desliga o filtro inteiro (período inicial também vira `None` de verdade, não cai no
+  padrão de hoje); trafega via header `X-Periodo-Ativo: 0` (junto de `X-Periodo-Inicial`/
+  `X-Periodo-Final`), capturado em `main.py` por um contextvar por requisição (mesmo
+  padrão do `X-Autor`) pra `_grade()` respeitar o filtro em toda resposta, não só em
+  `GET /api/estado`. Na tela, o toggle "só ativos"/"todos" saiu do grupo do `#gp-filter`
+  e virou o botão `#btn-periodo` ao lado do `#btn-hoje` (rótulo mostra a janela efetiva,
+  ex. "Período: 09/26→aberto" ou "Período: todos"), que abre um popover
+  (`#periodo-ctx`, mesmo padrão visual do `#aloc-ctx`) com período inicial, período final
+  e o checkbox de desligar o filtro. `frontend/js/api.js` persiste as 3 preferências em
+  `localStorage` e as manda em todo request. Testes novos em `test_aggregate.py`
+  reproduzem o caso real do bug (hora só num mês que sai da janela) e o estado
+  `periodo_ativo=False`; suíte completa (64 testes) verde.
+- **2026-09-12** — **Menu de contexto na grade Por Projeto: ajuste rápido de
+  alocação.** Botão direito numa célula de horas editável abre um menuzinho com
+  "Normalizar alocação" (tooltip "Ajustar para alocação plena (100%)", com o quanto
+  falta/sobra entre parênteses — ex. "+35h") e uma fileira de 5 botões (100/75/50/25/0%)
+  — cada um ajusta a célula pra aquele percentual da **capacidade daquela pessoa**,
+  arredondado pra hora inteira (nunca fração, ver invariante Option B). Funciona sobre
+  seleção de várias células (`EG.cellsPara` em `grid-excel.js`, reaproveita o mesmo
+  retângulo de seleção estilo Excel já existente): clicar dentro da seleção atual afeta
+  ela inteira, clicar fora afeta só a célula clicada (e a seleção pula pra ela, como no
+  Excel). Como o ajuste é por pessoa (capacidade varia), cada célula da seleção recebe
+  seu próprio valor calculado; o rótulo dos 5 botões mostra a hora exata quando todas as
+  células da seleção têm a mesma capacidade, senão cai pro percentual puro (não dá pra
+  mostrar dois números de hora diferentes no mesmo botão); o delta do "Normalizar" segue
+  a mesma lógica ("vários" se divergir). Rótulo/tooltip mostrado depende do botão
+  "Exibir: Horas/%" já existente. Ícone é uma barrinha de nível simples (SVG, mesmo
+  estilo mono-traço dos outros ícones do app — não copiado da mockup ASCII que o
+  usuário mandou só como referência de layout). Escopo desta rodada: só a grade **Por
+  Projeto**, a pedido explícito — dá pra estender pra Por Recurso depois, é o mesmo
+  mecanismo (`ALOC_INFO`/`applyBatch` já são genéricos).
+- **2026-09-11** — **Bug real no gráfico de área: linha de capacidade sempre no topo,
+  escondia superalocação.** A linha tracejada (capacidade/100%) era desenhada em
+  `yOf(maxY)` — mas `maxY` é, por definição, o próprio teto da escala (cresce pra
+  caber o pico mais alto), então essa linha ficava **sempre** exatamente no topo do
+  gráfico, nunca na altura real da capacidade. Com superalocação (ex.: capacidade
+  176h, 221h alocadas em nov/dez), o pico e a "linha de 176h" ficavam colados no
+  mesmo lugar, escondendo visualmente que ele ultrapassou a capacidade — o gráfico
+  parecia dizer "o pico é exatamente a capacidade", quando na verdade era 45h a mais.
+  Corrigido: a linha vai pra `yOf(cap)` (a altura de verdade dela dentro da escala,
+  que agora só serve pra definir até onde o eixo vai); a área que ultrapassa aparece
+  visivelmente acima da linha. Eixo Y também mudou de 3 rótulos fixos (topo/meio/0)
+  pra posição absoluta de verdade: rótulo do topo = valor real do teto da escala
+  (podia ser maior que a capacidade), e a capacidade ganha um rótulo próprio (em
+  amarelo) na altura certa quando não coincide com o topo.
+- **2026-09-11** — **Resumo de pessoa: nome de projeto truncando + legenda duplicada.**
+  Dois ajustes em "Principais projetos": (1) a coluna do nome tinha largura fixa
+  (90px), truncando nomes longos ("Barragem 4.0 - Fase 2" virava "Barragem 4.0 - f...")
+  mesmo sobrando espaço na linha — nome agora ocupa o espaço livre (`1fr`), a barra de
+  referência encolheu pra 56px fixos; (2) a legenda do gráfico de área (embaixo dele)
+  repetia os mesmos nomes de projeto que já aparecem logo abaixo em "Principais
+  projetos" — tirada; a cor de cada projeto agora aparece como um quadradinho ao lado
+  do nome ali mesmo (mesma paleta `cores2`), sem repetir a lista duas vezes.
+- **2026-09-11** — **"+ adicionar pessoa"/"+ adicionar tipo"/"+ adicionar projeto":
+  dropdown inline, só ativos, e sem duplicar quem já está no grupo.** Antes era um
+  único diálogo com `<select>`s mostrando **todo mundo** do banco (inclusive
+  desligados) e **todo projeto** (inclusive encerrado), pessoa e tipo de alocação
+  juntos na mesma tela. Passou por uma iteração com popup de busca (chegou a entrar
+  no código) e foi revertida a pedido do usuário — o formato final é:
+  - Clicar em "+ adicionar pessoa"/"+ adicionar projeto" transforma a própria célula
+    num `<select>` **inline** (não abre diálogo nenhum) — `addRowEscolha` em `main.js`.
+    Pessoa: só **ativas** (mesmo critério de `aggregate.cor_pessoa_mes` — `ativo`
+    truthy, `situacao` fora de Desligado/Planejado) e **sem quem já está naquele
+    grupo/tipo** (não dá pra duplicar `(projeto, matrícula, tipo)`); tem uma opção
+    fixa "+ pessoa nova" que pede matrícula/nome por `prompt()`. Projeto: só **não
+    encerrado** (`status` diferente de "Encerrado" — Prospecção/Aditivo/Em
+    Contratação/Contratado/Em Encerramento continuam todos disponíveis).
+  - "+ adicionar tipo" (nível do projeto) tinha um bug de UX: abria o dropdown de
+    **pessoa** primeiro, como se fosse "+ adicionar pessoa", quando deveria abrir o
+    de **tipo**. Corrigido (`addRowNovoTipo`): 1º dropdown lista os tipos que o
+    projeto **ainda não tem** (filtra os já usados nos grupos existentes); ao
+    escolher, a mesma célula troca pro dropdown de pessoa (sem exclusão — tipo é
+    novo, ninguém pode já estar nele).
+  - Segunda etapa (quando o tipo ainda não é conhecido) continua um popup minúsculo
+    (`#dlg-tipo`, só um `<select>`) — pulado quando o tipo já vem fixo (ex.: "+
+    adicionar pessoa" dentro de um grupo específico).
+  Puramente frontend, nenhuma rota nova.
+- **2026-09-11** — **`projeto.status` vira FK "lógica" pro catálogo — coluna de texto
+  removida.** `projeto` tinha `status` (TEXT) e `id_status` (INTEGER) editáveis
+  **independentemente**, sem nada garantindo que combinassem — e na prática só o texto
+  era preenchido (no banco de produção, 116 de 122 projetos tinham `status` mas
+  `id_status` NULL). A pedido do usuário: `id_status` vira a **única fonte de verdade**
+  (aponta pra `catalogo` onde `tipo='status'`); `status` deixou de existir como coluna —
+  texto é sempre derivado via `LEFT JOIN catalogo` (`aggregate.py`, `main.py._projetos`,
+  `cadastros.py`, `xlsx_export.py`). Migração em duas etapas, em `projeto`/`chg_projeto`/
+  `base_projeto`: (1) backfill — resolve `id_status` a partir do texto existente via
+  `catalogo` (case-insensitive; catalogo manda, sobrescreve se os dois já estavam
+  preenchidos e discordavam) — testado 100% sem perda nos dois bancos reais; (2)
+  `ALTER TABLE ... DROP COLUMN status`. Novo helper `db.resolver_id_status(conn,
+  status_texto, id_status)` reusado em todo write path que hoje só tem o texto (BI,
+  import de planilha antiga, formulário): `bi_import.load_projetos` (as duas escritas —
+  insert inicial e a sincronização por `id_projeto_externo`), `xlsx_import._insert_projeto`
+  /`_update_projeto`, `cadastros.editar_projeto` (aceita `status` texto por
+  compatibilidade, mas resolve pro id antes de gravar), `main.criar_projeto`. Frontend:
+  "Novo projeto" e a célula de Cadastros › Projetos viram `<select>` de catálogo em vez
+  de texto/número livre; a coluna "Status" na tabela de Cadastros passa a ser só leitura
+  (derivada), quem edita é "idStatus". Teste de round-trip
+  `test_status_vira_id_status_e_volta_igual_no_export` confirma que o `.xlsx` exportado
+  continua com `Status`/`idStatus` idênticos ao original. Aplicado nos dois bancos reais
+  (dev: 122/123 projetos com id_status resolvido, 1 já estava sem status desde antes;
+  prod: 122/122).
+- **2026-09-11** — **Catálogo (`Planilha4`) semeado direto na migração — não depende mais
+  de import de planilha por projeto.** `catalogo` (área, contrato, equipe, status,
+  tipo_alocacao, ensino, ativo) só era preenchido pelo import de planilha por projeto —
+  o BI nunca escreve nele. Um banco alimentado só por BI (o caminho mais comum hoje)
+  ficava com a aba "Catálogo" de Cadastros vazia (era o caso do `alocacao-dev.db`: 0
+  linhas, contra 84 no `alocacao.db` de produção, que em algum momento teve uma planilha
+  importada). Esses valores são, na prática, fixos — então `db._CATALOGO_PADRAO` (as 84
+  linhas capturadas do banco de produção) agora é gravado direto em `_migrate()` via
+  `INSERT OR IGNORE` (idempotente, PK é `tipo`+`texto`) — existe sempre, com ou sem
+  import de planilha. Aplicado diretamente no dev; prod já tinha essas mesmas linhas
+  (import de planilha nunca sobrescreve, só adiciona catálogos novos que ainda não
+  existirem). Teste `test_catalogo_padrao_semeado_na_migracao`.
+- **2026-09-11** — **Correções pós-feedback na tela de Configurações/seletor de usuário
+  + linha fantasma na tabela `pessoa`.** (1) Botão "Fechar" de `#dlg-config` não fazia
+  nada — faltava o `onclick` explícito (`button[value="cancel"]` dentro de um `<dialog>`
+  sem `<form method="dialog">` não fecha sozinho; todo outro diálogo do app já tinha essa
+  linha, esse foi só esquecido). (2) Lista de "Trocar usuário" mostrava o **apelido** —
+  ruim pra reconhecer quem é quem numa lista de busca; trocado pro nome original
+  (`pessoa.nome`, o que vem do BI). (3) A lista tinha `max-height` (encolhe conforme o
+  filtro reduz os resultados) — virou `height` fixa. (4) **Bug real de import**: uma
+  legenda de rodapé que o Power BI deixa na última linha exportada ("Filtros aplicados:
+  ativo não é Desligado") estava na mesma coluna da matrícula em `colabs.xlsx`, e
+  `bi_import.load_equipe` não validava o formato — virou uma "pessoa" fantasma (sem
+  nenhuma alocação, mas aparecia na lista de usuários). Corrigido na origem (guarda:
+  matrícula não pode ter quebra de linha nem passar de 20 caracteres) e limpo via
+  migração idempotente em `db.py` (`DELETE FROM pessoa WHERE matricula LIKE 'Filtros
+  aplicados:%'`) — roda sozinha no próximo restart de qualquer banco, dev ou prod, sem
+  precisar editar o `.db` na mão.
 - **2026-09-11** — **Identidade + papel + apelido chegam em todo o sistema**
   (`docs/COLABORACAO.md` "Identidade e papel de acesso" + "Plano de implementação").
   Escopo: identidade "chega" em tudo — **não** inclui aplicar a matriz de permissão de

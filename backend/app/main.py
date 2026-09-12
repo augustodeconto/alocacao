@@ -57,15 +57,32 @@ app = FastAPI(title="Planejamento de Alocação")
 # "Identidade e papel de acesso"). contextvar isola corretamente por request mesmo com
 # várias em paralelo (cada uma roda na sua própria task asyncio).
 _AUTOR_ATUAL: contextvars.ContextVar[str | None] = contextvars.ContextVar("autor_atual", default=None)
+# Filtro de período da tela (docs/ESPECIFICACAO.md §8) — mesma ideia do X-Autor: o
+# cliente manda em toda chamada (não só GET /api/estado), pra `_grade()` embutido nas
+# dezenas de respostas de endpoint mutante continuar respeitando o filtro em vez de
+# voltar pro padrão (mês atual / aberto) a cada edição.
+_PERIODO_INICIAL_ATUAL: contextvars.ContextVar[str | None] = contextvars.ContextVar("periodo_inicial_atual", default=None)
+_PERIODO_FINAL_ATUAL: contextvars.ContextVar[str | None] = contextvars.ContextVar("periodo_final_atual", default=None)
+# Liga/desliga o filtro inteiro — separado de periodo_inicial/final de propósito: "não veio
+# nada do cliente" (default True, cai no padrão de hoje) é um estado diferente de "o usuário
+# desligou explicitamente" (mostra tudo, sem corte nenhum — nem período inicial). Ver
+# aggregate.build_grade(periodo_ativo=...).
+_PERIODO_ATIVO_ATUAL: contextvars.ContextVar[bool] = contextvars.ContextVar("periodo_ativo_atual", default=True)
 
 
 @app.middleware("http")
-async def _capturar_autor(request, call_next):
+async def _capturar_contexto_requisicao(request, call_next):
     tok = _AUTOR_ATUAL.set((request.headers.get("x-autor") or "").strip() or None)
+    tok_pi = _PERIODO_INICIAL_ATUAL.set((request.headers.get("x-periodo-inicial") or "").strip() or None)
+    tok_pf = _PERIODO_FINAL_ATUAL.set((request.headers.get("x-periodo-final") or "").strip() or None)
+    tok_pa = _PERIODO_ATIVO_ATUAL.set((request.headers.get("x-periodo-ativo") or "1").strip() != "0")
     try:
         return await call_next(request)
     finally:
         _AUTOR_ATUAL.reset(tok)
+        _PERIODO_INICIAL_ATUAL.reset(tok_pi)
+        _PERIODO_FINAL_ATUAL.reset(tok_pf)
+        _PERIODO_ATIVO_ATUAL.reset(tok_pa)
 
 
 def _touch_projeto(projeto_id: int) -> None:
@@ -76,7 +93,9 @@ def _touch_projeto(projeto_id: int) -> None:
 
 
 def _grade() -> dict:
-    return build_grade(_conn)
+    return build_grade(
+        _conn, _PERIODO_INICIAL_ATUAL.get(), _PERIODO_FINAL_ATUAL.get(), _PERIODO_ATIVO_ATUAL.get()
+    )
 
 
 def _catalogos() -> dict:
@@ -143,13 +162,18 @@ def _usuario_atual(x_autor: str | None = None) -> dict:
 
 
 def _projetos() -> list[dict]:
+    # status é sempre derivado de id_status via catalogo (nunca guardado cru — ver
+    # docs/ESPECIFICACAO.md changelog "status vira FK lógica pro catálogo").
     return [
         dict(r)
         for r in _conn.execute(
-            """SELECT projeto_id, id_projeto_externo, nome, empresa, status,
-                      matricula_gp, gestor_projetos,
-                      arquivo_origem, criado_na_ferramenta, exportado_em, alterado_em
-               FROM projeto ORDER BY nome"""
+            """SELECT p.projeto_id, p.id_projeto_externo, p.nome, p.empresa,
+                      p.id_status, cat.texto AS status,
+                      p.matricula_gp, p.gestor_projetos,
+                      p.arquivo_origem, p.criado_na_ferramenta, p.exportado_em, p.alterado_em
+               FROM projeto p
+               LEFT JOIN catalogo cat ON cat.tipo='status' AND cat.id=p.id_status
+               ORDER BY p.nome"""
         )
     ]
 
@@ -409,16 +433,17 @@ def criar_projeto(payload: dict = Body(...)):
             r = _conn.execute("SELECT nome FROM pessoa WHERE matricula=?", (mat_gp,)).fetchone()
             gestor = r["nome"] if r else None
 
+        id_status = dbmod.resolver_id_status(_conn, payload.get("status"), payload.get("id_status"))
         cur = _conn.cursor()
         cur.execute(
             """INSERT INTO projeto
-               (id_projeto_externo, nome, empresa, status, id_status, matricula_gp,
+               (id_projeto_externo, nome, empresa, id_status, matricula_gp,
                 gestor_projetos, id_filial, cenario1, cenario2, cenario3,
                 criado_na_ferramenta, alterado_em)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
             (
                 str(externo) if externo else None, nome, payload.get("empresa"),
-                payload.get("status"), payload.get("id_status"), mat_gp, gestor,
+                id_status, mat_gp, gestor,
                 int(payload.get("id_filial") or 62),
                 payload.get("cenario1"), payload.get("cenario2"), payload.get("cenario3"),
                 _dt.datetime.now().isoformat(timespec="seconds"),

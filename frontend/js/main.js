@@ -1,4 +1,8 @@
-import { api, getAutor, setAutor } from "./api.js";
+import {
+  api, getAutor, setAutor,
+  getPeriodoInicial, setPeriodoInicial, getPeriodoFinal, setPeriodoFinal,
+  getPeriodoAtivo, setPeriodoAtivo,
+} from "./api.js";
 import { bindScrollSync, nextSyncMode, syncFlags, scrollRowIntoView, SYNC_MODES } from "./scroll-sync.js";
 import { initExcel } from "./grid-excel.js";
 
@@ -21,7 +25,6 @@ const S = {
   syncMode: SYNC_MODES.includes(localStorage.getItem("syncMode")) ? localStorage.getItem("syncMode") : "↓↑",
   open: new Set(JSON.parse(localStorage.getItem("open") || "[]")),  // nós expandidos; vazio = tudo recolhido
   gpFilter: localStorage.getItem("gpFilter") || "",
-  showAll: localStorage.getItem("showAll") === "1",
   selMatricula: null,
   selAloc: null,
   extraTail: 0,   // meses extras à direita, adicionados na tela para lançar horas além de tudo
@@ -98,6 +101,7 @@ function setOpen(which, open) {
 }
 
 function pct(horas, cap) { return cap ? Math.round((horas / cap) * 100) + "%" : "–"; }
+function pctNum(horas, cap) { return cap ? Math.round((horas / cap) * 100) : ""; }
 
 function cellValueNodes(horas, cap, sev) {
   const main = S.displayUnit === "horas" ? String(horas) : pct(horas, cap);
@@ -146,15 +150,6 @@ function treeCell(text, { level = 0, key, expandable, extra } = {}) {
   return td;
 }
 
-// linha "+ adicionar …": o rótulo fica só na coluna-árvore (fixa), o resto
-// da linha é uma célula vazia que rola normalmente.
-function addRow(label, indentClass, onclick) {
-  const tr = el("tr", { className: "addrow", onclick });
-  tr.append(el("td", { className: "treecol " + (indentClass || "ind0") }, label));
-  tr.append(el("td", { className: "month addfill", colSpan: Math.max(1, PERIODOS.length) }));
-  return tr;
-}
-
 function rowActions(f, projetoId, label, { comTipo = false } = {}) {
   const wrap = el("span", { className: "rowacts" });
   if (f.removido) {
@@ -198,7 +193,10 @@ function rowActions(f, projetoId, label, { comTipo = false } = {}) {
 
 function monthCell(cls, contentFrag, { extra, colorClass, alt, title, per } = {}) {
   const td = el("td", { className: `month ${cls}` });
-  if (per && cls.indexOf("cell") >= 0) td.dataset.per = per;
+  // `per` fica em toda célula de mês (editável, total ou addrow vazia) — é o que
+  // permite à camada de seleção (grid-excel.js) tratar QUALQUER célula da grade
+  // como selecionável/copiável, não só as editáveis.
+  if (per) td.dataset.per = per;
   if (extra) td.classList.add("extra");
   if (alt) td.classList.add("alt");
   if (colorClass) td.classList.add(colorClass);
@@ -223,7 +221,7 @@ function totalCell(node, p, { extra } = {}) {
   const a = totAltInfo(node, p);
   const has = p in node.totais;
   const frag = (has || a.alt) ? document.createTextNode(String(has ? node.totais[p] : 0)) : null;
-  return monthCell("total", frag, { extra, ...a });
+  return monthCell("total", frag, { extra, per: p, ...a });
 }
 
 // subalocação (vermelho) é mais grave que superalocação (amarelo) pra planejamento de
@@ -269,11 +267,13 @@ function sevIconEl(sev) {
   return span;
 }
 
-// Linha de alocação que vale a pena mostrar: com "só ativos" ligado, esconde as
-// puramente históricas (nenhuma hora do mês atual em diante). Linhas novas
-// (fora da baseline) e removidas continuam visíveis — foram mexidas de propósito.
+// Linha de alocação que vale a pena mostrar: some só se nenhum mês dentro da janela do
+// filtro de período (docs/ESPECIFICACAO.md §8) tiver hora dela — mesmo critério das
+// colunas, então nunca existe total visível sem a linha que o explica. Com o filtro
+// desligado a janela é o histórico inteiro, então isso já mostra tudo sozinho. Linhas
+// novas (fora da baseline) e removidas continuam visíveis — foram mexidas de propósito.
 function filhoVisivel(f) {
-  return S.showAll || f.novo || f.removido || f.tem_horas_futuras;
+  return f.novo || f.removido || f.tem_horas_no_periodo;
 }
 
 
@@ -285,7 +285,7 @@ function renderGridProjeto() {
 
   for (const proj of g.por_projeto) {
     if (!gpVisivel(proj)) continue;
-    if (!S.showAll && !proj.tem_futuro) continue;
+    if (!proj.visivel_no_periodo) continue;
     const key = `p:${proj.projeto_id}`;
     const janela = new Set(proj.periodos_projeto);
     const acoes = el("span");
@@ -316,7 +316,7 @@ function renderGridProjeto() {
     for (const grp of proj.grupos) {
       const gkey = `g:${proj.projeto_id}:${grp.tipo_alocacao}`;
       const visFilhos = grp.filhos.filter(filhoVisivel);
-      if (!visFilhos.length && !grp.modificado && !S.showAll) continue;
+      if (!visFilhos.length && !grp.modificado) continue;
       const trg = el("tr", { className: "lvl1 grupo" });
       trg.append(treeCell(grp.tipo_alocacao, {
         level: 1, key: gkey, expandable: true,
@@ -343,11 +343,12 @@ function renderGridProjeto() {
         }
         tb.append(tr);
       }
-      tb.append(addRow("+ adicionar pessoa", "ind2",
-        () => openAddAloc({ projeto_id: proj.projeto_id, tipo_alocacao: grp.tipo_alocacao })));
+      tb.append(addRowEscolha("+ adicionar pessoa", "ind2", {
+        projeto_id: proj.projeto_id, tipo_alocacao: grp.tipo_alocacao,
+        excluir: new Set(grp.filhos.filter((f) => !f.removido).map((f) => f.matricula)),
+      }));
     }
-    tb.append(addRow("+ adicionar tipo", "ind1",
-      () => openAddAloc({ projeto_id: proj.projeto_id })));
+    tb.append(addRowNovoTipo("+ adicionar tipo", "ind1", proj));
   }
   gridProj.append(tb);
 }
@@ -359,7 +360,7 @@ function renderGridRecurso() {
   const tb = el("tbody");
 
   for (const pes of g.por_recurso) {
-    if (!S.showAll && !pes.tem_futuro) continue;
+    if (!pes.visivel_no_periodo) continue;
     // O filtro de GP é um filtro de PROJETOS: age só na grade "Por Projeto".
     // "Por Recurso" sempre mostra todos os projetos da pessoa e o total real.
     // Esconde só as linhas puramente históricas (ver filhoVisivel).
@@ -391,8 +392,7 @@ function renderGridRecurso() {
       }
       tb.append(tr);
     }
-    tb.append(addRow("+ adicionar alocação", "ind1",
-      () => openAddAloc({ matricula: pes.matricula, nome: pes.nome })));
+    tb.append(addRowEscolha("+ adicionar projeto", "ind1", { matricula: pes.matricula, nome: pes.nome }));
   }
   gridRec.append(tb);
 }
@@ -510,6 +510,75 @@ async function redo() {
   catch (err) { log(err.message, true); render(); }
 }
 
+// -- menu de contexto: ajuste rápido de alocação (botão direito numa célula) --------
+// ícone "nível" (barrinha), reaproveitado no botão largo (100%, cheio) e nos 5
+// pequenos (100/75/50/25/0%, cada um com o preenchimento proporcional).
+function _iconNivel(frac) {
+  const w = Math.max(0, Math.min(12, 12 * frac)).toFixed(1);
+  return `<svg viewBox="0 0 16 10" width="20" height="13" aria-hidden="true">
+    <rect x="0.75" y="0.75" width="14.5" height="8.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.1"/>
+    <rect x="2" y="2" width="${w}" height="6" rx="0.6" fill="currentColor"/>
+  </svg>`;
+}
+const ALOC_CTX_NIVEIS = [100, 75, 50, 25, 0];
+
+function hideAlocCtx() { const m = $("#aloc-ctx"); if (m) m.hidden = true; }
+
+// `cells` = [{alocacaoId, periodo}] — a seleção inteira, ou só a célula clicada (ver
+// EG.cellsPara em grid-excel.js). Cada célula pode ser de uma pessoa diferente, então
+// o ajuste (quantas horas = 100%) é calculado por célula, nunca um valor só pra todas.
+function abrirAjusteAlocacao(cells, ev) {
+  const validas = cells
+    .map((c) => ({ ...c, cap: ALOC_INFO[c.alocacaoId]?.capacidade_mensal }))
+    .filter((c) => c.cap);
+  if (!validas.length) return;   // ninguém na seleção tem capacidade cadastrada
+
+  const capsIguais = new Set(validas.map((c) => c.cap)).size === 1;
+  const capUnica = validas[0].cap;
+
+  const aplicar = async (pct) => {
+    const edits = validas.map((c) => ({
+      alocacao_id: c.alocacaoId, periodo: c.periodo,
+      valor: String(Math.round(c.cap * pct / 100)),
+    }));
+    hideAlocCtx();
+    await applyBatch(edits);
+  };
+
+  // "(+35h)" no botão de normalizar: mesmo delta pra todo mundo, ou "vários" se a
+  // seleção tiver gente com capacidade/horas atuais diferentes.
+  const deltas = validas.map((c) => c.cap - horasAtual(c.alocacaoId, c.periodo));
+  const deltaTxt = new Set(deltas).size === 1 ? `${deltas[0] > 0 ? "+" : ""}${deltas[0]}h` : "vários";
+
+  const m = $("#aloc-ctx");
+  m.innerHTML = "";
+  const btnNorm = el("button", {
+    className: "aloc-normalizar", title: "Ajustar para alocação plena (100%)",
+    onclick: () => aplicar(100),
+  });
+  // quebra fixa em 2 linhas de propósito — sem isso, a largura do "(+35h)"/"(0h)"
+  // varia e às vezes deixa "Normalizar alocação" numa linha só, às vezes quebra;
+  // isso mudava a altura do botão dependendo do valor. Forçando sempre 2 linhas, a
+  // altura fica igual à fileira de baixo não importa o texto do delta.
+  btnNorm.innerHTML = `${_iconNivel(1)}<span class="txt">Normalizar<br>alocação</span><span class="delta">(${deltaTxt})</span>`;
+  m.append(btnNorm);
+
+  const row = el("div", { className: "aloc-niveis" });
+  for (const pct of ALOC_CTX_NIVEIS) {
+    const rotulo = S.displayUnit === "pct" ? `${pct}%`
+      : capsIguais ? `${Math.round(capUnica * pct / 100)}h` : `${pct}%`;
+    const btn = el("button", { onclick: () => aplicar(pct) });
+    btn.innerHTML = `${_iconNivel(pct / 100)}<span>${rotulo}</span>`;
+    row.append(btn);
+  }
+  m.append(row);
+
+  m.hidden = false;
+  const mw = m.offsetWidth || 220, mh = m.offsetHeight || 90;
+  m.style.left = Math.min(ev.clientX, window.innerWidth - mw - 6) + "px";
+  m.style.top = Math.min(ev.clientY, window.innerHeight - mh - 6) + "px";
+}
+
 function _render() {
   renderUsuarioBadge();
   const sp = { pl: panelProj.scrollLeft, pt: panelProj.scrollTop, rl: panelRec.scrollLeft, rt: panelRec.scrollTop };
@@ -522,7 +591,10 @@ function _render() {
       for (const f of g.filhos)
         if (f.alocacao_id != null) {
           HORAS_IDX[f.alocacao_id] = f.horas;
-          ALOC_INFO[f.alocacao_id] = { projeto_id: p.projeto_id, tipo: g.tipo_alocacao, matricula: f.matricula };
+          ALOC_INFO[f.alocacao_id] = {
+            projeto_id: p.projeto_id, tipo: g.tipo_alocacao, matricula: f.matricula,
+            capacidade_mensal: f.capacidade_mensal,
+          };
         }
   CONFIGURED = new Set(S.estado.grade.por_projeto.flatMap((p) => p.periodos_projeto));
   renderGridProjeto();
@@ -530,11 +602,11 @@ function _render() {
   applySelection();
   if (EXCEL) EXCEL.rebuild();
   const pp = S.estado.grade.por_projeto;
-  const visiveis = pp.filter((p) => gpVisivel(p) && (S.showAll || p.tem_futuro)).length;
+  const visiveis = pp.filter((p) => gpVisivel(p) && p.visivel_no_periodo).length;
   const sujos = pp.filter((p) => p.sujo).length;
   $("#proj-status").textContent =
     `${visiveis}/${pp.length} projeto(s)` + (sujos ? ` · ${sujos} não exportado(s)` : "");
-  $("#btn-showall").textContent = S.showAll ? "todos" : "só ativos";
+  atualizarBtnPeriodo(g);
   if (S.view === "ver") renderVer();
   if (!S.scrollInit && PERIODOS.length) {
     S.scrollInit = true;
@@ -548,6 +620,91 @@ function _render() {
 function currentMonthISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function fmtMesCurto(iso) {
+  if (!iso) return null;
+  const [y, m] = iso.split("-");
+  return `${m}/${y.slice(2)}`;
+}
+
+// Rótulo do botão reflete o filtro efetivamente aplicado pelo servidor (grade.periodo_*),
+// não o que está nos campos do popover — evita rótulo desatualizado se outra aba/sessão
+// mudou o padrão, e cobre o caso "ainda não configurado" == mês atual.
+function atualizarBtnPeriodo(g) {
+  const btn = $("#btn-periodo");
+  if (!btn) return;
+  if (!g.periodo_ativo) {
+    btn.textContent = "Período: todos";
+    btn.classList.remove("ativo");
+    return;
+  }
+  const de = fmtMesCurto(g.periodo_inicial);
+  const ate = g.periodo_final ? fmtMesCurto(g.periodo_final) : "aberto";
+  btn.textContent = `Período: ${de}→${ate}`;
+  btn.classList.add("ativo");
+}
+
+function hidePeriodoCtx() { const m = $("#periodo-ctx"); if (m) m.hidden = true; }
+
+// Copiar os resumos do painel lateral (custo/pessoa) pro Excel: os trechos tabelados
+// (KPIs, legenda do donut, barras de custo/mês, projetos, mês a mês) marcam suas linhas
+// com `data-copy-row` e cada campo com `data-copy-cell` (mais `data-copy-value` quando o
+// valor a copiar é diferente do texto exibido — ex. "1.234,56" formatado na tela vira o
+// número puro "1234.56" na cópia; horas/percentual idem, sem "h"/"%"). Só entra em ação
+// se a seleção nativa do navegador (arrastar o mouse) estiver dentro de #sec-body — a
+// seleção retangular das duas grades (grid-excel.js) usa outro mecanismo e se anula
+// sozinha quando detecta essa mesma seleção nativa fora dela.
+function _copySecBody(e) {
+  const sec = $("#sec-body");
+  if (!sec) return;
+  const dom = window.getSelection();
+  if (!dom || dom.isCollapsed || !dom.rangeCount) return;
+  if (!sec.contains(dom.getRangeAt(0).commonAncestorContainer)) return;
+  const linhas = Array.from(sec.querySelectorAll("[data-copy-row]")).filter((r) => dom.containsNode(r, true));
+  if (!linhas.length) return;
+  e.preventDefault();
+  const tsv = linhas.map((r) =>
+    Array.from(r.querySelectorAll("[data-copy-cell]"))
+      .map((c) => (c.dataset.copyValue ?? c.textContent).trim())
+      .join("\t")
+  ).join("\n");
+  e.clipboardData.setData("text/plain", tsv);
+}
+
+// Popover ao lado do botão "hoje" (docs/ESPECIFICACAO.md §8): período inicial/final da
+// janela de meses exibida nas duas grades, mais a opção de desligar o filtro inteiro
+// (mostra tudo, sem corte nenhum — nem período inicial). Os campos partem do que o
+// servidor resolveu (g.periodo_*), não de S, pra sempre refletir o estado real aplicado.
+function abrirPeriodoCtx(ev) {
+  const m = $("#periodo-ctx");
+  const g = S.estado.grade;
+  const chk = $("#periodo-ativo-chk");
+  const ini = $("#periodo-inicial-inp");
+  const fim = $("#periodo-final-inp");
+  chk.checked = g.periodo_ativo;
+  ini.value = g.periodo_inicial || "";
+  fim.value = g.periodo_final || "";
+  ini.disabled = fim.disabled = !g.periodo_ativo;
+
+  chk.onchange = async () => {
+    setPeriodoAtivo(chk.checked);
+    ini.disabled = fim.disabled = !chk.checked;
+    try { S.estado = await api.estado(); render(); } catch (err) { log(err.message, true); }
+  };
+  const aplicarDatas = async () => {
+    setPeriodoInicial(ini.value);
+    setPeriodoFinal(fim.value);
+    try { S.estado = await api.estado(); render(); } catch (err) { log(err.message, true); }
+  };
+  ini.onchange = aplicarDatas;
+  fim.onchange = aplicarDatas;
+
+  m.hidden = false;
+  const r = ev.currentTarget.getBoundingClientRect();
+  const mw = m.offsetWidth || 220;
+  m.style.left = Math.min(r.left, window.innerWidth - mw - 6) + "px";
+  m.style.top = (r.bottom + 4) + "px";
 }
 
 const MONTH_W = 62;  // largura fixa da coluna de mês (ver CSS)
@@ -723,49 +880,142 @@ function beginEdit(td, { initial, after } = {}) {
   input.addEventListener("blur", () => commit());
 }
 
-// -- add allocation dialog -----------------------------------------
-function openAddAloc(ctx) {
-  const dlg = $("#dlg-aloc");
-  const body = $("#da-body");
-  body.innerHTML = "";
-  const tipos = (S.estado.catalogos.tipo_alocacao || []).map((t) => t.texto);
-  const selTipo = el("select", {}, ...tipos.map((t) => el("option", { value: t, textContent: t })));
-  if (ctx.tipo_alocacao) selTipo.value = ctx.tipo_alocacao;
+// -- adicionar pessoa/projeto: dropdown inline na própria linha (não popup) ------
+// mesma regra de "ativa" usada em aggregate.cor_pessoa_mes (situação ausente conta
+// como Ativo; Desligado/Planejado ficam de fora — não dá pra alocar gente que já saiu
+// ou que ainda nem começou).
+function pessoaAtiva(p) {
+  if (p.ativo != null && !Number(p.ativo)) return false;
+  const sit = (p.situacao || "Ativo").trim().toLowerCase();
+  return sit !== "desligado" && sit !== "planejado";
+}
+// projeto "ativo" = não encerrado (mesmo critério de aggregate.py: status texto).
+function projetoAtivo(p) {
+  return (p.status || "").trim().toLowerCase() !== "encerrado";
+}
 
-  let getPayload;
-  if (ctx.projeto_id) {
-    const pessoas = S.estado.pessoas;
-    const selPes = el("select", {}, el("option", { value: "", textContent: "— nova matrícula —" }),
-      ...pessoas.map((p) => el("option", { value: p.matricula, textContent: `${p.nome} (${p.matricula})` })));
-    const inMat = el("input", { placeholder: "matrícula" });
-    const inNome = el("input", { placeholder: "nome" });
-    body.append(el("label", {}, "Pessoa"), selPes, el("label", {}, "Nova matrícula"), inMat,
-      el("label", {}, "Nome"), inNome, el("label", {}, "Tipo alocação"), selTipo);
-    getPayload = () => {
-      const matricula = selPes.value || inMat.value.trim();
-      if (!matricula) throw new Error("informe a pessoa");
-      return { projeto_id: ctx.projeto_id, matricula, nome: selPes.value ? "" : inNome.value.trim(),
-        tipo_alocacao: selTipo.value };
-    };
-  } else {
-    const projs = S.estado.projetos;
-    const selProj = el("select", {}, ...projs.map((p) => el("option", { value: p.projeto_id, textContent: p.nome })));
-    body.append(el("label", {}, "Projeto"), selProj, el("label", {}, "Tipo alocação"), selTipo);
-    getPayload = () => ({ projeto_id: Number(selProj.value), matricula: ctx.matricula, nome: ctx.nome,
-      tipo_alocacao: selTipo.value });
+// popup só pra escolher o tipo de alocação (2ª etapa, quando ainda não é conhecido —
+// ex. "+ adicionar tipo"; já vem pronto quando se adiciona dentro de um grupo).
+function abrirTipoAlocacao() {
+  return new Promise((resolve) => {
+    const dlg = $("#dlg-tipo");
+    const sel = $("#tipo-sel");
+    const tipos = (S.estado.catalogos.tipo_alocacao || []).map((t) => t.texto);
+    sel.innerHTML = "";
+    for (const t of tipos) sel.append(el("option", { value: t, textContent: t }));
+    $("#tipo-ok").onclick = () => { dlg.close(); resolve(sel.value); };
+    dlg.querySelector('button[value="cancel"]').onclick = () => { dlg.close("cancel"); resolve(null); };
+    if (dlg._cancelHandler) dlg.removeEventListener("cancel", dlg._cancelHandler);
+    dlg._cancelHandler = () => resolve(null);
+    dlg.addEventListener("cancel", dlg._cancelHandler);
+    dlg.showModal();
+  });
+}
+
+async function _finalizarAlocacao(projeto_id, matricula, nome, tipoFixo) {
+  let tipo_alocacao = tipoFixo;
+  if (!tipo_alocacao) {
+    tipo_alocacao = await abrirTipoAlocacao();
+    if (!tipo_alocacao) { render(); return; }   // cancelou o popup de tipo — some o dropdown
   }
+  try {
+    const res = await api.criarAlocacao({ projeto_id, matricula, nome, tipo_alocacao });
+    S.estado = res.estado;
+    render();
+  } catch (err) { log(err.message, true); render(); }
+}
 
-  const ok = $("#da-ok");
-  ok.onclick = async () => {
-    try {
-      const res = await api.criarAlocacao(getPayload());
-      S.estado = res.estado;
-      dlg.close();
-      render();
-    } catch (err) { log(err.message, true); }
+// opções de pessoa pro dropdown: só ativas, e sem quem já está no grupo/tipo alvo
+// (não dá pra alocar a mesma pessoa duas vezes no mesmo projeto+tipo).
+function _opcoesPessoas(excluirMatriculas) {
+  const excl = excluirMatriculas || new Set();
+  const opcoes = S.estado.pessoas.filter((p) => pessoaAtiva(p) && !excl.has(p.matricula))
+    .slice().sort((a, b) => a.nome.localeCompare(b.nome))
+    .map((p) => ({ value: p.matricula, texto: `${p.nome} (${p.matricula})` }));
+  opcoes.unshift({ value: "__nova__", texto: "+ pessoa nova (matrícula ainda não cadastrada)" });
+  return opcoes;
+}
+
+// troca o conteúdo de `td` por um <select> inline (dropdown, não popup); some (via
+// render() completo) se perder o foco sem escolher nada.
+function _selectInline(td, placeholder, opcoes, onEscolher) {
+  const sel = el("select", {},
+    el("option", { value: "", textContent: placeholder }),
+    ...opcoes.map((o) => el("option", { value: o.value, textContent: o.texto })));
+  td.innerHTML = "";
+  td.append(sel);
+  sel.onchange = () => { if (sel.value) onEscolher(sel.value); };
+  sel.onblur = () => { if (!sel.value) render(); };
+  sel.focus();
+  if (sel.showPicker) { try { sel.showPicker(); } catch { /* nem todo browser tem */ } }
+  return sel;
+}
+
+// Linha "+ adicionar pessoa" (tipo já fixo — dentro de um grupo) ou "+ adicionar
+// projeto" (Por Recurso, tipo escolhido depois no popup). Dropdown inline, não popup.
+// células vazias (uma por mês, não um colspan só) — é o que permite arrastar uma
+// seleção que atravesse a linha "+ adicionar..." no meio de um bloco maior (ex.:
+// selecionar/copiar um projeto inteiro, grupos e tudo) sem ela quebrar a grade de
+// seleção retangular (ver grid-excel.js).
+function addRowCelulas() {
+  return PERIODOS.map((p) => el("td", { className: "month addfill", dataset: { per: p } }));
+}
+
+function addRowEscolha(label, indentClass, ctx) {
+  const tr = el("tr", { className: "addrow" });
+  const td = el("td", { className: "treecol " + (indentClass || "ind0") }, label);
+  tr.append(td, ...addRowCelulas());
+
+  td.onclick = () => {   // só a coluna 1 (árvore) abre o dropdown — o resto da linha não
+    if (td.querySelector("select")) return;   // já aberto — deixa o <select> nativo agir
+    if (ctx.projeto_id) {
+      _selectInline(td, "— escolher pessoa —", _opcoesPessoas(ctx.excluir), async (v) => {
+        if (v === "__nova__") {
+          const mat = (prompt("Matrícula da nova pessoa:") || "").trim();
+          if (!mat) { render(); return; }
+          const nome = (prompt("Nome (opcional):") || "").trim();
+          await _finalizarAlocacao(ctx.projeto_id, mat, nome, ctx.tipo_alocacao);
+        } else {
+          await _finalizarAlocacao(ctx.projeto_id, v, "", ctx.tipo_alocacao);
+        }
+      });
+    } else {
+      const opcoes = S.estado.projetos.filter(projetoAtivo).slice().sort((a, b) => a.nome.localeCompare(b.nome))
+        .map((p) => ({ value: String(p.projeto_id), texto: p.nome }));
+      _selectInline(td, "— escolher projeto —", opcoes, async (v) => {
+        await _finalizarAlocacao(Number(v), ctx.matricula, ctx.nome, ctx.tipo_alocacao);
+      });
+    }
   };
-  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
-  dlg.showModal();
+  return tr;
+}
+
+// Linha "+ adicionar tipo" (nível do projeto): primeiro escolhe o TIPO (só os que o
+// projeto ainda não tem), depois — na mesma célula — a pessoa pra esse tipo novo.
+function addRowNovoTipo(label, indentClass, proj) {
+  const tr = el("tr", { className: "addrow" });
+  const td = el("td", { className: "treecol " + (indentClass || "ind0") }, label);
+  tr.append(td, ...addRowCelulas());
+
+  td.onclick = () => {   // só a coluna 1 (árvore) abre o dropdown — o resto da linha não
+    if (td.querySelector("select")) return;
+    const existentes = new Set(proj.grupos.map((g) => g.tipo_alocacao));
+    const tipos = (S.estado.catalogos.tipo_alocacao || []).map((t) => t.texto).filter((t) => !existentes.has(t));
+    const opcoesTipo = tipos.map((t) => ({ value: t, texto: t }));
+    _selectInline(td, "— escolher tipo —", opcoesTipo, (tipo) => {
+      _selectInline(td, "— escolher pessoa —", _opcoesPessoas(), async (v) => {
+        if (v === "__nova__") {
+          const mat = (prompt("Matrícula da nova pessoa:") || "").trim();
+          if (!mat) { render(); return; }
+          const nome = (prompt("Nome (opcional):") || "").trim();
+          await _finalizarAlocacao(proj.projeto_id, mat, nome, tipo);
+        } else {
+          await _finalizarAlocacao(proj.projeto_id, v, "", tipo);
+        }
+      });
+    });
+  };
+  return tr;
 }
 
 // -- toolbar actions --------------------------------------------------
@@ -968,13 +1218,18 @@ function openExport() {
 
 function openNovoProjeto() {
   const dlg = $("#dlg-novo");
+  const selStatus = $("#np-status");
+  const opts = (S.estado?.catalogos?.status || []).slice().sort((a, b) => a.id - b.id);
+  selStatus.innerHTML = "";
+  selStatus.append(el("option", { value: "", textContent: "—" }),
+    ...opts.map((o) => el("option", { value: String(o.id), textContent: o.texto })));
   $("#np-ok").onclick = async () => {
     try {
       const res = await api.criarProjeto({
         id_projeto_externo: $("#np-id").value.trim() || null,
         nome: $("#np-nome").value.trim(),
         empresa: $("#np-empresa").value.trim(),
-        status: $("#np-status").value.trim(),
+        id_status: selStatus.value ? Number(selStatus.value) : null,
         matricula_gp: $("#np-gp").value.trim(),
         id_filial: Number($("#np-filial").value) || 62,
       });
@@ -983,7 +1238,8 @@ function openNovoProjeto() {
       render();
       if (S.view === "cad") await cadLoad(S.cadTab);   // atualiza a tabela de cadastro
       log(`projeto "${$("#np-nome").value.trim()}" criado`);
-      for (const i of ["np-id", "np-nome", "np-empresa", "np-status", "np-gp"]) $("#" + i).value = "";
+      for (const i of ["np-id", "np-nome", "np-empresa", "np-gp"]) $("#" + i).value = "";
+      selStatus.value = "";
     } catch (err) { log(err.message, true); }
   };
   dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
@@ -1229,20 +1485,20 @@ async function renderCusto() {
 
     body.innerHTML = `
       <div class="sec-kpis">
-        <div><div class="lbl">Total (mês atual em diante)</div><div class="val" title="${_brlFull(totGeral)}">${_brl(totGeral)}</div></div>
-        <div><div class="lbl">Horas</div><div class="val">${Math.round(horasGeral).toLocaleString("pt-BR")}</div></div>
+        <div data-copy-row><div class="lbl" data-copy-cell>Total (mês atual em diante)</div><div class="val" title="${_brlFull(totGeral)}" data-copy-cell data-copy-value="${totGeral}">${_brl(totGeral)}</div></div>
+        <div data-copy-row><div class="lbl" data-copy-cell>Horas</div><div class="val" data-copy-cell data-copy-value="${horasGeral}">${Math.round(horasGeral).toLocaleString("pt-BR")}</div></div>
       </div>
       <svg class="sec-donut" width="128" height="128" viewBox="0 0 42 42" role="img" aria-label="composição do custo por tipo">
         <circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--disabled)" stroke-width="6"/>
         ${segs}
       </svg>
       <div class="sec-legend">${porTipo.map((t, i) =>
-        `<span><i style="background:${CUSTO_CORES[i % CUSTO_CORES.length]}"></i>${t.nome} ${totGeral ? Math.round(t.custo / totGeral * 100) : 0}%</span>`).join("")}
+        `<span data-copy-row><i style="background:${CUSTO_CORES[i % CUSTO_CORES.length]}"></i><span data-copy-cell>${t.nome}</span> <span data-copy-cell data-copy-value="${totGeral ? Math.round(t.custo / totGeral * 100) : 0}">${totGeral ? Math.round(t.custo / totGeral * 100) : 0}%</span></span>`).join("")}
       </div>
       <div class="sec-h">Custo por mês <span class="sec-h-total">· total ${_brlFull(totGeral)}</span></div>
       <div class="sec-bars">${pers.map((p) => {
         const v = totMes[p] || 0;
-        return `<div class="b"><span class="m">${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxMes * 100).toFixed(1)}%"></span></span><span class="n">${_brlFull(v)}</span></div>`;
+        return `<div class="b" data-copy-row><span class="m" data-copy-cell>${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxMes * 100).toFixed(1)}%"></span></span><span class="n" data-copy-cell data-copy-value="${v}">${_brlFull(v)}</span></div>`;
       }).join("")}</div>`;
   } catch (err) {
     body.innerHTML = `<div class="sec-empty">falha ao carregar custo: ${err.message}</div>`;
@@ -1311,9 +1567,11 @@ function renderResumoPessoa() {
   const totalHoras = projetos.reduce((a, [, v]) => a + v, 0);
   const cores2 = projNomes.map((_, i) => CUSTO_CORES[i % CUSTO_CORES.length]);
 
-  // gráfico de área empilhado (uma camada por projeto), em horas ou % da capacidade
+  // gráfico de área empilhado (uma camada por projeto), em horas ou % da capacidade.
+  // Sem legenda própria — a cor de cada projeto já aparece de novo bem abaixo, no
+  // quadradinho ao lado do nome em "Principais projetos" (mesmo `cores2`), então uma
+  // legenda aqui só repetiria os mesmos nomes duas vezes.
   let areaSvg = `<div class="sec-empty">sem alocação futura em nenhum projeto</div>`;
-  let legenda = "";
   if (periodos.length && projNomes.length) {
     const valorDe = (h) => unidade === "pct" ? (cap ? h / cap * 100 : 0) : h;
     const W = 280, H = 110, PB = 4, PT = 6;
@@ -1342,24 +1600,33 @@ function renderResumoPessoa() {
       if (i % passo !== 0 && i !== n - 1) return "";
       return `<span style="left:${(xOf(i) / W * 100).toFixed(1)}%">${fmtMes(p)}</span>`;
     }).join("");
-    // eixo Y: 0 / metade / topo — topo = capacidade (ou 100%); linha do topo mais
-    // marcada (é o teto real), a do meio só uma referência solta.
-    const topoRotulo = unidade === "pct" ? "100%" : (cap ? `${Math.round(cap)}h` : `${Math.round(maxY)}h`);
-    const meioVal = maxY / 2;
-    const meioRotulo = unidade === "pct" ? "50%" : `${Math.round(meioVal)}h`;
-    const temTeto = unidade === "pct" || !!cap;
+    // Linha tracejada = capacidade (100% / cap horas), na altura REAL dela — não no
+    // topo do gráfico. Bug corrigido: antes desenhava em yOf(maxY), que é sempre o
+    // topo por definição (maxY é o próprio teto da escala); numa superalocação
+    // (ex.: 221h alocadas com capacidade 176h) isso empurrava a linha pro topo junto
+    // com o pico, escondendo que ele ultrapassou a capacidade. Agora maxY só define a
+    // escala; a linha de capacidade fica onde ela de fato está dentro dela, e o pico
+    // que ultrapassa aparece visivelmente ACIMA da linha.
+    const tetoVal = unidade === "pct" ? 100 : cap;
+    const pctY = (v) => (yOf(v) / H) * 100;
+    const labelTopo = unidade === "pct" ? `${Math.round(maxY)}%` : `${Math.round(maxY)}h`;
+    const labelCap = unidade === "pct" ? "100%" : `${Math.round(tetoVal)}h`;
+    // só mostra o rótulo da capacidade separado do topo se ela não coincidir com ele
+    // (senão os dois textos ficam colados um em cima do outro)
+    const capSeparadoDoTopo = tetoVal != null && Math.abs(pctY(tetoVal) - pctY(maxY)) > 12;
     areaSvg = `
       <div class="sec-area-wrap">
-        <div class="sec-area-y"><span>${topoRotulo}</span><span>${meioRotulo}</span><span>0</span></div>
+        <div class="sec-area-y">
+          <span style="top:${pctY(maxY).toFixed(1)}%">${labelTopo}</span>
+          ${capSeparadoDoTopo ? `<span class="sec-area-y-cap" style="top:${pctY(tetoVal).toFixed(1)}%">${labelCap}</span>` : ""}
+          <span style="top:${pctY(0).toFixed(1)}%">0</span>
+        </div>
         <svg class="sec-area" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="alocação ao longo do tempo, por projeto">
-          <line x1="0" y1="${yOf(meioVal).toFixed(1)}" x2="${W}" y2="${yOf(meioVal).toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3"/>
-          ${temTeto ? `<line x1="0" y1="${yOf(maxY).toFixed(1)}" x2="${W}" y2="${yOf(maxY).toFixed(1)}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>` : ""}
+          ${tetoVal != null ? `<line x1="0" y1="${yOf(tetoVal).toFixed(1)}" x2="${W}" y2="${yOf(tetoVal).toFixed(1)}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>` : ""}
           ${camadas.map((c) => `<path d="${pathDe(c.serie)}" fill="${c.cor}" fill-opacity=".82"/>`).join("")}
         </svg>
       </div>
       <div class="sec-area-eixo">${marcasX}</div>`;
-    legenda = `<div class="sec-legend">${projNomes.map((n, i) =>
-      `<span><i style="background:${cores2[i]}"></i>${n}</span>`).join("")}</div>`;
   }
 
   body.innerHTML = `
@@ -1369,17 +1636,16 @@ function renderResumoPessoa() {
       fimFmt ? `<span class="${fimVencido ? "sec-vencido" : ""}">contrato até ${fimFmt}</span>` : ""}</div>` : ""}
     <div class="sec-h">Alocação ao longo do tempo <span class="sec-h-total">· mês atual em diante</span></div>
     ${areaSvg}
-    ${legenda}
     ${projetos.length ? `
     <div class="sec-h">Principais projetos <span class="sec-h-total">· mês atual em diante</span></div>
-    <div class="sec-bars">${projetos.slice(0, 6).map(([nomeProj, v], i) =>
-      `<div class="b sec-b-proj"><span class="m sec-m-proj" title="${nomeProj}">${nomeProj}</span><span class="track"><span class="fill" style="width:${(totalHoras ? v / totalHoras * 100 : 0).toFixed(1)}%;background:${cores2[projNomes.indexOf(nomeProj)]}"></span></span><span class="n">${Math.round(v)}h</span></div>`).join("")}
+    <div class="sec-bars">${projetos.slice(0, 6).map(([nomeProj, v]) =>
+      `<div class="b sec-b-proj" data-copy-row><i class="sw" style="background:${cores2[projNomes.indexOf(nomeProj)]}"></i><span class="m sec-m-proj" title="${nomeProj}" data-copy-cell>${nomeProj}</span><span class="track"><span class="fill" style="width:${(totalHoras ? v / totalHoras * 100 : 0).toFixed(1)}%;background:${cores2[projNomes.indexOf(nomeProj)]}"></span></span><span class="n" data-copy-cell data-copy-value="${v}">${Math.round(v)}h</span></div>`).join("")}
     </div>` : `<div class="sec-empty">sem alocação futura em nenhum projeto</div>`}
     <div class="sec-h">Alocação mês a mês</div>
     <div class="sec-bars">${periodos.length ? periodos.map((p) => {
       const v = totais[p] || 0;
       const cor = CUSTO_COR_PESSOA[cores[p]] || "var(--accent)";
-      return `<div class="b"><span class="m">${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxH * 100).toFixed(1)}%;background:${cor}"></span></span><span class="n">${Math.round(v)}h <span class="sec-twin">${pct(v, cap)}</span></span></div>`;
+      return `<div class="b" data-copy-row><span class="m" data-copy-cell>${fmtMes(p)}</span><span class="track"><span class="fill" style="width:${(v / maxH * 100).toFixed(1)}%;background:${cor}"></span></span><span class="n" data-copy-cell data-copy-value="${v}">${Math.round(v)}h <span class="sec-twin" data-copy-cell data-copy-value="${pctNum(v, cap)}">${pct(v, cap)}</span></span></div>`;
     }).join("") : `<div class="sec-empty">sem meses à frente carregados</div>`}</div>
   `;
 }
@@ -1407,6 +1673,15 @@ function cadCellInput(row, col) {
   if (col === "ativo") {
     inp = el("select", {}, ...[["Sim", "1"], ["Não", "0"]].map(([t, v]) =>
       el("option", { value: v, textContent: t, selected: String(row[col] ?? 1) === v })));
+  } else if (col === "id_status") {
+    // id_status é a FK "lógica" pro catálogo — edita por nome, não por número cru
+    // (a coluna "Status" ao lado é só leitura, derivada disso).
+    const opts = (S.estado?.catalogos?.status || []).slice().sort((a, b) => a.id - b.id);
+    inp = el("select", {},
+      el("option", { value: "", textContent: "—", selected: row[col] == null }),
+      ...opts.map((o) => el("option", {
+        value: String(o.id), textContent: o.texto, selected: String(row[col]) === String(o.id),
+      })));
   } else {
     inp = el("input", { type: CAD_NUM.has(col) ? "number" : "text", value: row[col] ?? "" });
     if (col === "carga_diaria") inp.step = "0.5";
@@ -1424,7 +1699,14 @@ function cadCellInput(row, col) {
       inp._orig = String(inp.value);
       td.classList.add("saved");
       log(`${CAD_LABELS[col] || col} salvo.`);
-      if (["nome", "gestor_projetos", "capacidade_mensal", "ativo", "situacao", "fim_contrato"].includes(col)) {
+      if (col === "id_status") {
+        // "Status" é uma coluna derivada ao lado, só leitura — atualiza o texto dela
+        // também, senão fica mostrando o valor antigo até trocar de aba.
+        const tr = td.closest("tr");
+        const idx = CAD.cols.indexOf("status");
+        if (idx >= 0 && tr.children[idx]) tr.children[idx].textContent = row.status ?? "";
+      }
+      if (["nome", "gestor_projetos", "capacidade_mensal", "ativo", "situacao", "fim_contrato", "id_status"].includes(col)) {
         try { S.estado = await api.estado(); } catch {}
       }
     } catch (e) {
@@ -2109,10 +2391,6 @@ function renderUsuarioBadge() {
   }
 }
 
-function usuarioNomeCompleto(pessoa) {
-  return (pessoa.apelido && pessoa.apelido.trim()) || pessoa.nome || pessoa.matricula;
-}
-
 function abrirSeletorUsuario({ bloqueante = false } = {}) {
   return new Promise((resolve) => {
     const dlg = $("#dlg-usuario");
@@ -2131,8 +2409,10 @@ function abrirSeletorUsuario({ bloqueante = false } = {}) {
       lista.innerHTML = "";
       if (!filtradas.length) { lista.append(el("div", { className: "sec-empty" }, "ninguém encontrado")); return; }
       for (const p of filtradas) {
-        const row = el("div", { className: "usr-item" },
-          el("span", {}, usuarioNomeCompleto(p)),
+        // nome original (o que vem do BI), não o apelido — pra reconhecer quem é quem
+        // na lista sem ambiguidade; o apelido é só um jeito de exibir depois de escolher.
+        const row = el("div", { className: "pick-item" },
+          el("span", {}, p.nome),
           el("span", { className: "mat" }, p.matricula));
         row.onclick = () => { dlg.close(); resolve(p.matricula); };
         lista.append(row);
@@ -2163,6 +2443,7 @@ async function trocarUsuario(mat) {
 
 function abrirConfig() {
   const dlg = $("#dlg-config");
+  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
   const btnTema = $("#cfg-tema");
   const refreshTema = () => {
     btnTema.textContent = "Tema: " + { auto: "automático", light: "claro", dark: "escuro" }[S.theme];
@@ -2228,16 +2509,23 @@ function wire() {
     localStorage.setItem("gpFilter", S.gpFilter);
     render();
   };
-  $("#btn-showall").onclick = () => {
-    S.showAll = !S.showAll;
-    localStorage.setItem("showAll", S.showAll ? "1" : "0");
-    render();
-  };
+  $("#btn-periodo").onclick = (e) => { e.stopPropagation(); abrirPeriodoCtx(e); };
+  $("#periodo-ctx").addEventListener("click", (e) => e.stopPropagation());
   for (const b of document.querySelectorAll("button[data-grid]"))
     b.onclick = () => setOpen(b.dataset.grid, b.dataset.act === "expand");
 
   gridProj.addEventListener("click", (e) => onRowClick(e, "projeto"));
   gridRec.addEventListener("click", (e) => onRowClick(e, "recurso"));
+  // botão direito numa célula de horas (Por Projeto) -> ajuste rápido de alocação
+  // (normalizar / 100-75-50-25-0%). Age sobre a seleção inteira se a célula clicada
+  // estiver dentro dela (ver EG.cellsPara em grid-excel.js).
+  gridProj.addEventListener("contextmenu", (e) => {
+    const td = e.target.closest("td.cell.editable");
+    if (!td) return;
+    e.preventDefault();
+    const cells = EXCEL && EXCEL.cellsPara(td);
+    if (cells && cells.length) abrirAjusteAlocacao(cells, e);
+  });
   bindScrollSync(panelProj, panelRec);
 
   // ---- view Cadastros ----
@@ -2254,6 +2542,11 @@ function wire() {
   $("#ver-split").addEventListener("mousedown", startVerSplit);
   document.addEventListener("click", hideCtx);
   document.addEventListener("scroll", hideCtx, true);
+  document.addEventListener("click", hideAlocCtx);
+  document.addEventListener("scroll", hideAlocCtx, true);
+  document.addEventListener("click", hidePeriodoCtx);
+  document.addEventListener("scroll", hidePeriodoCtx, true);
+  document.addEventListener("copy", _copySecBody);
 
   // ---- barra direita (rail + painéis) ----
   for (const b of document.querySelectorAll(".secrail-btn[data-panel]"))

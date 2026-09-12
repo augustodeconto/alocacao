@@ -196,7 +196,9 @@ button { color: inherit; }
   padding: 4px 6px; font-size: 11.5px;
 }
 #toolbar button.mini:hover { color: var(--accent); }
-#btn-showall, #btn-unidade { white-space: nowrap; }
+#btn-unidade { white-space: nowrap; }
+#btn-periodo { white-space: nowrap; }
+#btn-periodo.ativo { color: var(--accent); }
 
 /* ================= grades (alocação) ================= */
 .panels { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
@@ -280,8 +282,7 @@ tr.lvl1.grupo > td.total { font-weight: 600; }
 td.treecol.ind0 { padding-left: 6px; }
 td.treecol.ind1 { padding-left: 22px; }
 td.treecol.ind2 { padding-left: 40px; }
-tr.addrow td { color: var(--accent); font-style: italic; cursor: pointer; text-align: left; }
-tr.addrow td.treecol { background: var(--bg); }
+tr.addrow td.treecol { color: var(--accent); font-style: italic; cursor: pointer; text-align: left; background: var(--bg); }
 tr.addrow:hover td.treecol { background: var(--sel); }
 tr.addrow td.addfill { color: transparent; }
 
@@ -297,8 +298,11 @@ tr.novo td.treecol::before { content: "novo "; color: var(--accent); font-size: 
 select.tipo-sel { font: inherit; font-size: 11px; max-width: 130px; padding: 0 2px; background: var(--edit-bg); color: var(--fg); }
 
 td.cell.editable { cursor: cell; background: var(--edit-bg); }
-td.cell.editable.sel-range { background-color: var(--sel-range); background-image: none; }
-td.cell.editable.sel-active {
+/* seleção cobre qualquer célula da grade (coluna 1, totais, "+ adicionar..." incluídos —
+   ver grid-excel.js), não só as editáveis — por isso os seletores pegam td.month e
+   td.treecol em geral, não só td.cell.editable. */
+td.month.sel-range, td.treecol.sel-range { background-color: var(--sel-range); background-image: none; }
+td.month.sel-active, td.treecol.sel-active {
   background-color: var(--sel-active); background-image: none;
   outline: 2px solid var(--accent); outline-offset: -2px; position: relative; z-index: 3;
 }
@@ -488,6 +492,50 @@ td.cell input {
 .ver-ctx .sep { height: 1px; background: var(--line); margin: 4px 2px; }
 dialog .actions button.danger { border-color: var(--err); color: var(--err); }
 
+/* -- menu de contexto: ajuste rápido de alocação -- */
+.aloc-ctx {
+  position: fixed; z-index: 200; width: 220px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 16px 40px -12px rgba(0,0,0,.45); padding: 6px;
+}
+.aloc-ctx[hidden] { display: none; }
+.aloc-normalizar {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: var(--sel); color: var(--fg); padding: 7px 9px;
+  border-radius: 6px; cursor: pointer; margin-bottom: 6px; font: inherit; font-size: 12.5px;
+}
+.aloc-normalizar:hover { background: var(--sel-strong); }
+.aloc-normalizar svg { flex: 0 0 auto; color: var(--accent); }
+.aloc-normalizar .txt { flex: 1 1 auto; font-weight: 600; }
+.aloc-normalizar .delta { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.aloc-niveis { display: flex; gap: 4px; }
+.aloc-niveis button {
+  flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border: 1px solid var(--line); background: transparent; color: var(--fg); font: inherit;
+  padding: 6px 2px; border-radius: 6px; cursor: pointer; font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.aloc-niveis button:hover { background: var(--sel-strong); border-color: var(--accent); }
+.aloc-niveis button svg { color: var(--accent); }
+
+/* -- popover: filtro de período da tela -- */
+.periodo-ctx {
+  position: fixed; z-index: 200; width: 220px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 16px 40px -12px rgba(0,0,0,.45); padding: 10px; font-size: 12.5px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.periodo-ctx[hidden] { display: none; }
+.periodo-check { display: flex; align-items: center; gap: 7px; cursor: pointer; font-weight: 600; }
+.periodo-campos { display: flex; flex-direction: column; gap: 6px; }
+.periodo-campos label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); }
+.periodo-campos input[type="month"] {
+  font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--fg); border-radius: 5px; width: 128px;
+}
+.periodo-campos input:disabled { opacity: .5; cursor: default; }
+.periodo-hint { color: var(--muted); font-size: 10.5px; line-height: 1.4; }
+
 .gg { display: grid; grid-template-columns: max-content 1fr; font-size: 12.5px; }
 .gg-svg { display: block; }
 .gg-rows { min-width: 0; }
@@ -537,17 +585,27 @@ dialog .actions button.danger { border-color: var(--err); color: var(--err); }
 .sec-bars .b .track { height: 13px; background: var(--disabled); border-radius: 3px; overflow: hidden; }
 .sec-bars .b .fill { height: 100%; background: var(--accent); }
 .sec-bars .b .n { font-size: 10.5px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.sec-bars .b.sec-b-proj { grid-template-columns: 90px 1fr 42px; }
+/* nome ganha o espaço que sobra (era truncando nomes longos tipo "Barragem 4.0 - Fase
+   2" numa coluna fixa de 90px); a barrinha vira só uma referência visual pequena. */
+.sec-bars .b.sec-b-proj { grid-template-columns: 8px 1fr 56px 42px; }
+.sec-bars .b .sw { width: 8px; height: 8px; border-radius: 2px; }
 .sec-bars .b .m.sec-m-proj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sec-pessoa-nome { font-size: 15px; font-weight: 650; margin-bottom: 1px; }
 .sec-pessoa-cargo { font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 4px; }
 .sec-pessoa-ficha { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; line-height: 1.5; }
 .sec-vencido { color: var(--err, #d1594a); font-weight: 600; }
 .sec-area-wrap { display: flex; align-items: stretch; gap: 6px; }
+/* posição absoluta de propósito — a linha de capacidade fica na altura REAL dela
+   dentro da escala (pode não ser o topo, numa superalocação o pico passa por cima
+   dela), não fixa em topo/meio/base. */
 .sec-area-y {
-  flex: 0 0 auto; width: 30px; display: flex; flex-direction: column; justify-content: space-between;
-  text-align: right; font-size: 9.5px; color: var(--muted); padding: 1px 0; font-variant-numeric: tabular-nums;
+  position: relative; flex: 0 0 auto; width: 34px;
+  text-align: right; font-size: 9.5px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
+.sec-area-y span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+.sec-area-y span:first-child { transform: translateY(0); }
+.sec-area-y span:last-child { transform: translateY(-100%); }
+.sec-area-y-cap { color: var(--sev-amarelo); font-weight: 600; }
 .sec-area { display: block; flex: 1 1 auto; min-width: 0; height: 110px; }
 .sec-area-eixo { position: relative; height: 14px; font-size: 10px; color: var(--muted); margin: 0 0 10px 36px; }
 .sec-area-eixo span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
@@ -586,15 +644,17 @@ dialog .body.arq button.primary { background: var(--accent); color: #fff; border
   display: flex; align-items: center; justify-content: center; border: 1.5px solid var(--rail-bg);
 }
 #dlg-usuario { width: 360px; }
-.usr-lista { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
-.usr-item {
+/* picker genérico (usuário, pessoa pra alocar, projeto pra alocar) — altura fixa de
+   propósito, não pode encolher conforme o filtro reduz os resultados */
+.pick-lista { height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.pick-item {
   display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; cursor: pointer;
   border-bottom: 1px solid var(--line); font-size: 12.5px;
 }
-.usr-item:last-child { border-bottom: 0; }
-.usr-item:hover { background: var(--sel); }
-.usr-item .mat { color: var(--muted); font-variant-numeric: tabular-nums; }
-.usr-lista .sec-empty { padding: 14px; text-align: center; }
+.pick-item:last-child { border-bottom: 0; }
+.pick-item:hover { background: var(--sel); }
+.pick-item .mat { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pick-lista .sec-empty { padding: 14px; text-align: center; }
 #dlg-config { width: 360px; }
 .cfg-usuario { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; font-size: 13px; }
 .cfg-usuario .papel { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }

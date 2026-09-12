@@ -13,14 +13,59 @@ DEFAULT_DB_PATH = (
     else Path(__file__).resolve().parent.parent / "alocacao.db"
 )
 
+# Catálogo (`Planilha4`) — na prática fixo/imutável (área, contrato, equipe, status,
+# tipo_alocacao, ensino, ativo). Antes só chegava via import de planilha por projeto;
+# a importação do BI nunca escreve aqui, então um banco alimentado só por BI (o caminho
+# mais comum hoje) ficava com a aba "Catálogo" vazia. Valores capturados do banco de
+# produção em 2026-09-11 — gravados direto na migração pra existirem sempre, com ou sem
+# import de planilha (tipo, id, texto); (tipo, texto) é a PK, então repetir é no-op.
+_CATALOGO_PADRAO: list[tuple[str, int | None, str]] = [
+    ("area", 1, "PMO"), ("area", 2, "Automação/Controle"), ("area", 3, "Coordenação"),
+    ("area", 4, "Hardware"), ("area", 5, "Software Embarcado"), ("area", 6, "Gestão de projetos"),
+    ("area", 7, "Gestão unidade"), ("area", 8, "IA/Otimização"), ("area", 9, "Mecânica"),
+    ("area", 10, "Sistemas Aeroespaciais"), ("area", 11, "Software"), ("area", 12, "Vendas"),
+    ("area", 13, "Visão computacional"), ("area", 14, "Direção"), ("area", 15, "Machine Learning"),
+    ("area", 16, "PCP"),
+    ("ativo", None, "Desligado"), ("ativo", None, "Planejado"),
+    ("contrato", 1, "Bolsista I"), ("contrato", 2, "Bolsista II"), ("contrato", 3, "Bolsista III"),
+    ("contrato", 4, "Bolsista IV"), ("contrato", 5, "Bolsista V"), ("contrato", 6, "Bolsista VI"),
+    ("contrato", 7, "Estagiário"), ("contrato", 8, "Pesquisador(a) I"),
+    ("contrato", 9, "Pesquisador(a) II"), ("contrato", 10, "Pesquisador(a) III"),
+    ("contrato", 11, "GP I"), ("contrato", 12, "GP II"), ("contrato", 13, "Coordenaçao"),
+    ("contrato", 14, "Apoio"), ("contrato", 15, "Apoio PMO"), ("contrato", 16, "Vendas"),
+    ("contrato", 17, "Assessor de Inovação"), ("contrato", 18, "Gerente de Operações"),
+    ("contrato", 19, "Pesquisador Chefe"), ("contrato", 20, "Técnico Serviços Especializados"),
+    ("contrato", 21, "Supervisor de Manutenção"), ("contrato", 22, "Analista de PCP"),
+    ("contrato", 23, "Assistente Administrativo"), ("contrato", 24, "Assessor de Gestão Estratégica"),
+    ("contrato", 25, "Analista de Gestão de Pessoas"),
+    ("contrato", 26, "Analista de Gestão de Projetos I"),
+    ("contrato", 27, "Analista de Gestão de Projetos II"),
+    ("contrato", 28, "Analista de Gestão de Projetos III"),
+    ("contrato", 29, "Analista Administrativo"), ("contrato", 30, "Desenvolvedor Junior"),
+    ("contrato", 31, "Desenvolvedor Pleno"), ("contrato", 32, "Desenvolvedor Senior"),
+    ("contrato", 33, "Especialista em Tecnologia"), ("contrato", 34, "Especialista em Serviços"),
+    ("contrato", 35, "Cientista de Dados"), ("contrato", 36, "Laboratorista - Junior"),
+    ("contrato", 37, "Laboratorista - Pleno"), ("contrato", 38, "Laboratorista - Senior"),
+    ("ensino", None, "Doutorado"), ("ensino", None, "Ensino Superior"),
+    ("ensino", None, "Especialização"), ("ensino", None, "Mestrado"), ("ensino", None, "Técnico"),
+    ("equipe", 1, "Manufatura"), ("equipe", 2, "Laser"), ("equipe", 3, "Latecme"),
+    ("equipe", 4, "Embarcados"), ("equipe", 5, "Apoio"), ("equipe", 6, "Coordenação"),
+    ("equipe", 7, "Vendas"), ("equipe", 8, "Gestão"), ("equipe", 9, "Serviços"),
+    ("equipe", 10, "AGP"), ("equipe", 11, "IST"),
+    ("status", 1, "Prospecção"), ("status", 2, "Aditivo"), ("status", 3, "Em Contratação"),
+    ("status", 4, "Contratado"), ("status", 5, "Em Encerramento"), ("status", 6, "Encerrado"),
+    ("tipo_alocacao", 1, "Técnica"), ("tipo_alocacao", 2, "Econômica"),
+    ("tipo_alocacao", 3, "Prospecção"), ("tipo_alocacao", 4, "OffShore"),
+    ("tipo_alocacao", 5, "TecnicaEPII"), ("tipo_alocacao", 6, "TecnicaANP"),
+]
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projeto (
     projeto_id          INTEGER PRIMARY KEY AUTOINCREMENT,
     id_projeto_externo  TEXT UNIQUE,
     nome                TEXT NOT NULL,
     empresa             TEXT,
-    status              TEXT,
-    id_status           INTEGER,
+    id_status           INTEGER,  -- FK "lógica" p/ catalogo(tipo='status', id) — texto derivado, nunca guardado cru
     matricula_gp        TEXT,
     id_filial           INTEGER DEFAULT 62,
     cenario1            INTEGER,
@@ -144,7 +189,7 @@ CREATE TABLE IF NOT EXISTS head_ (
 CREATE TABLE IF NOT EXISTS chg_projeto (
     commit_id INTEGER NOT NULL REFERENCES commit_(commit_id),
     projeto_id INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-    nome TEXT, empresa TEXT, status TEXT, id_status INTEGER, matricula_gp TEXT,
+    nome TEXT, empresa TEXT, id_status INTEGER, matricula_gp TEXT,
     id_filial INTEGER,
     cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER, gestor_projetos TEXT,
     PRIMARY KEY (commit_id, projeto_id)
@@ -196,7 +241,7 @@ CREATE TABLE IF NOT EXISTS baseline_alocacao_mes (
 );
 CREATE TABLE IF NOT EXISTS base_projeto (
     projeto_id INTEGER PRIMARY KEY,
-    nome TEXT, empresa TEXT, status TEXT, id_status INTEGER, matricula_gp TEXT,
+    nome TEXT, empresa TEXT, id_status INTEGER, matricula_gp TEXT,
     id_filial INTEGER,
     cenario1 INTEGER, cenario2 INTEGER, cenario3 INTEGER, gestor_projetos TEXT
 );
@@ -302,6 +347,37 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "VALUES ('SISTEMA', 'Sistema', 'Sistema', 'admin')"
     )
 
+    # bug de import corrigido em bi_import.py (load_equipe sem guard de matrícula): uma
+    # legenda de rodapé do Power BI ("Filtros aplicados: ...") vazou pra `pessoa` como se
+    # fosse uma matrícula real. Sem alocação nenhuma nas duas bases onde apareceu — só
+    # limpa a linha viva; não mexe no histórico de commit (chg_pessoa/base_pessoa).
+    conn.execute("DELETE FROM pessoa WHERE matricula LIKE 'Filtros aplicados:%'")
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO catalogo (tipo, id, texto) VALUES (?,?,?)", _CATALOGO_PADRAO)
+
+    # projeto.status (texto livre) e projeto.id_status (FK "lógica" pro catálogo) eram
+    # editáveis independentemente, sem nada garantindo que combinassem entre si — na
+    # prática só o texto era preenchido (id_status ficava NULL quase sempre). id_status
+    # vira a única fonte de verdade; o texto passa a ser sempre derivado via join com
+    # `catalogo` (aggregate.py, xlsx_export.py). Backfill primeiro (catalogo é
+    # autoridade — resolve/sobrescreve id_status a partir do texto, pra não perder
+    # informação de bancos onde só o texto estava preenchido), depois dropa a coluna.
+    for tbl in ("projeto", "chg_projeto", "base_projeto"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({tbl})")}
+        if "status" not in cols:
+            continue
+        conn.execute(
+            f"""UPDATE {tbl} SET id_status = (
+                    SELECT cat.id FROM catalogo cat
+                    WHERE cat.tipo='status' AND lower(cat.texto) = lower(TRIM({tbl}.status))
+                )
+                WHERE status IS NOT NULL AND TRIM(status) <> ''
+                  AND EXISTS (SELECT 1 FROM catalogo cat
+                              WHERE cat.tipo='status' AND lower(cat.texto) = lower(TRIM({tbl}.status)))"""
+        )
+        conn.execute(f"ALTER TABLE {tbl} DROP COLUMN status")
+
     have_pr = {r["name"] for r in conn.execute("PRAGMA table_info(projeto)")}
     if "gestor_projetos" not in have_pr:
         conn.execute("ALTER TABLE projeto ADD COLUMN gestor_projetos TEXT")
@@ -385,6 +461,22 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def resolver_id_status(conn: sqlite3.Connection, status_texto, id_status=None) -> int | None:
+    """`projeto.status` não existe mais como coluna — id_status é a única fonte de
+    verdade (FK "lógica" pro catalogo(tipo='status')). Usar aqui pra converter texto
+    livre (de import antigo, formulário, BI) pro id na hora de gravar; se `id_status` já
+    veio explícito, ele manda (texto é só um jeito alternativo de dizer a mesma coisa)."""
+    if id_status is not None:
+        return id_status
+    if not status_texto or not str(status_texto).strip():
+        return None
+    r = conn.execute(
+        "SELECT id FROM catalogo WHERE tipo='status' AND lower(texto)=lower(?)",
+        (str(status_texto).strip(),),
+    ).fetchone()
+    return r["id"] if r else None
 
 
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

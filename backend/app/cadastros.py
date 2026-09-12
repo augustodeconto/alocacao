@@ -12,6 +12,8 @@ import threading
 
 from fastapi import APIRouter, Body, HTTPException
 
+from . import db as dbmod
+
 router = APIRouter(prefix="/api/cadastro", tags=["cadastro"])
 
 _conn: sqlite3.Connection | None = None
@@ -38,7 +40,6 @@ _PROJETO_EDITAVEL = {
     "id_projeto_externo": str,
     "nome": str,
     "empresa": str,
-    "status": str,
     "id_status": int,
     "matricula_gp": str,
     "id_filial": int,
@@ -46,10 +47,19 @@ _PROJETO_EDITAVEL = {
     "cenario2": int,
     "cenario3": int,
 }
-_PROJETO_COLS = (
-    "projeto_id, id_projeto_externo, nome, empresa, status, id_status, matricula_gp, "
-    "id_filial, cenario1, cenario2, cenario3, arquivo_origem, "
-    "criado_na_ferramenta, exportado_em, alterado_em"
+# "status" não é coluna própria — é sempre derivado de id_status via catalogo(tipo=
+# 'status'). Aparece na tabela (somente leitura, pra reconhecer o texto de relance);
+# quem edita é id_status (ver docs/ESPECIFICACAO.md changelog).
+_PROJETO_COLS = [
+    "projeto_id", "id_projeto_externo", "nome", "empresa", "status", "id_status",
+    "matricula_gp", "id_filial", "cenario1", "cenario2", "cenario3", "arquivo_origem",
+    "criado_na_ferramenta", "exportado_em", "alterado_em",
+]
+_PROJETO_SELECT = (
+    "SELECT p.projeto_id, p.id_projeto_externo, p.nome, p.empresa, cat.texto AS status, "
+    "p.id_status, p.matricula_gp, p.id_filial, p.cenario1, p.cenario2, p.cenario3, "
+    "p.arquivo_origem, p.criado_na_ferramenta, p.exportado_em, p.alterado_em "
+    "FROM projeto p LEFT JOIN catalogo cat ON cat.tipo='status' AND cat.id=p.id_status"
 )
 
 
@@ -66,14 +76,9 @@ def listar_projetos():
     conn = _db()
     with _lock:  # type: ignore[union-attr]
         return {
-            "colunas": _PROJETO_COLS.replace(" ", "").split(","),
+            "colunas": _PROJETO_COLS,
             "editaveis": list(_PROJETO_EDITAVEL),
-            "linhas": [
-                dict(r)
-                for r in conn.execute(
-                    f"SELECT {_PROJETO_COLS} FROM projeto ORDER BY nome"
-                )
-            ],
+            "linhas": [dict(r) for r in conn.execute(f"{_PROJETO_SELECT} ORDER BY p.nome")],
         }
 
 
@@ -85,6 +90,11 @@ def editar_projeto(projeto_id: int, payload: dict = Body(...)):
             "SELECT 1 FROM projeto WHERE projeto_id=?", (projeto_id,)
         ).fetchone():
             raise HTTPException(404, "projeto não encontrado")
+        payload = dict(payload)
+        if "status" in payload and "id_status" not in payload:
+            # tela manda texto (ex.: formulário antigo) — resolve pro id, que é quem
+            # de fato grava; "status" nunca é coluna própria.
+            payload["id_status"] = dbmod.resolver_id_status(conn, payload.pop("status"))
         sets, args = [], []
         for campo, tipo in _PROJETO_EDITAVEL.items():
             if campo not in payload:
@@ -113,9 +123,7 @@ def editar_projeto(projeto_id: int, payload: dict = Body(...)):
         args.append(projeto_id)
         conn.execute(f"UPDATE projeto SET {', '.join(sets)} WHERE projeto_id=?", args)
         conn.commit()
-        row = conn.execute(
-            f"SELECT {_PROJETO_COLS} FROM projeto WHERE projeto_id=?", (projeto_id,)
-        ).fetchone()
+        row = conn.execute(f"{_PROJETO_SELECT} WHERE p.projeto_id=?", (projeto_id,)).fetchone()
         return {"linha": dict(row)}
 
 

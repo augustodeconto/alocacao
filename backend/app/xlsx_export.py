@@ -309,9 +309,16 @@ def exportar_projeto(
     conn: sqlite3.Connection, projeto_id: int, destino_pasta: str, template_path: str,
     inicio: str | None = None,
 ) -> str:
-    pr = conn.execute("SELECT * FROM projeto WHERE projeto_id=?", (projeto_id,)).fetchone()
-    if pr is None:
+    row = conn.execute("SELECT * FROM projeto WHERE projeto_id=?", (projeto_id,)).fetchone()
+    if row is None:
         raise KeyError(projeto_id)
+    pr = dict(row)
+    # status não é coluna própria — sempre derivado de id_status via catalogo, pro
+    # arquivo exportado continuar tendo Status/idStatus preenchidos como sempre teve.
+    cat = conn.execute(
+        "SELECT texto FROM catalogo WHERE tipo='status' AND id=?", (pr["id_status"],)
+    ).fetchone() if pr["id_status"] is not None else None
+    pr["status"] = cat["texto"] if cat else None
     base = pr["arquivo_origem"] if pr["arquivo_origem"] and Path(pr["arquivo_origem"]).exists() else template_path
     if not base or not Path(base).exists():
         raise FileNotFoundError("sem arquivo de origem nem template")

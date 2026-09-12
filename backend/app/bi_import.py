@@ -29,6 +29,7 @@ import sys
 import unicodedata
 from pathlib import Path
 
+from . import db as dbmod
 from .xlsx_io import Workbook
 
 
@@ -106,6 +107,11 @@ def load_equipe(conn: sqlite3.Connection, sheet) -> dict:
 
         mv = g("matricula")
         matricula = str(int(mv)) if isinstance(mv, float) and mv.is_integer() else str(mv).strip()
+        # Power BI às vezes deixa uma legenda de rodapé ("Filtros aplicados: ...") na
+        # última linha exportada, na mesma coluna da matrícula — não é gente. Matrícula
+        # de verdade é um token curto, sem quebra de linha.
+        if not matricula or "\n" in matricula or len(matricula) > 20:
+            continue
         mats.add(matricula)
         nome = (g("colaborador") or "").strip()
         carga = _num(g("carga horaria")) or None
@@ -210,7 +216,7 @@ def _meses_contiguos(ini: str, fim: str) -> list[str]:
 
 # campos que o BI é dono (o resto de projeto/pessoa pertence ao usuário e NÃO
 # pode ser arrastado para dentro do commit do BI)
-_BI_PROJETO_FIELDS = ["nome", "empresa", "status", "gestor_projetos"]
+_BI_PROJETO_FIELDS = ["nome", "empresa", "id_status", "gestor_projetos"]
 _BI_PESSOA_FIELDS = ["nome", "situacao", "area", "tipo_contrato", "fim_contrato",
                      "carga_diaria", "valor_hora"]
 
@@ -349,25 +355,32 @@ def load_projetos(conn: sqlite3.Connection, sheet) -> dict:
                  status=excluded.status, gestor=excluded.gestor""",
             (pid, nome, empresa, status, gestor),
         )
-        # tabela de trabalho: o projeto do BI vira `projeto` (editável no grid)
+        # tabela de trabalho: o projeto do BI vira `projeto` (editável no grid).
+        # status não é coluna própria — resolve pro id via catalogo(tipo='status')
+        # (o BI só manda o texto; id_status é a única fonte de verdade na base).
+        id_status = dbmod.resolver_id_status(conn, status)
         conn.execute(
-            """INSERT INTO projeto (id_projeto_externo, nome, empresa, status, gestor_projetos)
+            """INSERT INTO projeto (id_projeto_externo, nome, empresa, id_status, gestor_projetos)
                VALUES (?,?,?,?,?)
                ON CONFLICT(id_projeto_externo) DO UPDATE SET
-                 nome=excluded.nome, empresa=excluded.empresa, status=excluded.status,
+                 nome=excluded.nome, empresa=excluded.empresa, id_status=excluded.id_status,
                  gestor_projetos=excluded.gestor_projetos""",
-            (str(pid), nome or f"#{pid}", empresa, status, gestor),
+            (str(pid), nome or f"#{pid}", empresa, id_status, gestor),
         )
         n += 1
-    # sincroniza nos projetos de planejamento (por id_projeto_externo)
+    # sincroniza nos projetos de planejamento (por id_projeto_externo). status não é
+    # coluna própria — resolve o texto do BI pro id via catalogo antes de gravar.
     conn.execute(
         """UPDATE projeto SET
              gestor_projetos = (SELECT gestor FROM bi_projeto b
                                 WHERE b.id_projetos = CAST(projeto.id_projeto_externo AS INTEGER)),
              empresa = COALESCE((SELECT empresa FROM bi_projeto b
                                  WHERE b.id_projetos = CAST(projeto.id_projeto_externo AS INTEGER)), empresa),
-             status = COALESCE((SELECT status FROM bi_projeto b
-                                WHERE b.id_projetos = CAST(projeto.id_projeto_externo AS INTEGER)), status)
+             id_status = COALESCE(
+                 (SELECT cat.id FROM bi_projeto b
+                  JOIN catalogo cat ON cat.tipo='status' AND lower(cat.texto)=lower(b.status)
+                  WHERE b.id_projetos = CAST(projeto.id_projeto_externo AS INTEGER)),
+                 id_status)
            WHERE id_projeto_externo IS NOT NULL"""
     )
     conn.commit()

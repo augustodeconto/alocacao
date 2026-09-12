@@ -12,6 +12,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from . import db as dbmod
 from .xlsx_io import Sheet, Workbook, serial_to_date
 
 _MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -283,14 +284,15 @@ def _to_float(v: object) -> float | None:
 
 # -- writers -------------------------------------------------------------
 def _insert_projeto(cur, proj: dict, path: str, periodos: list[str]) -> int:
+    id_status = dbmod.resolver_id_status(cur.connection, proj["status"], proj["id_status"])
     cur.execute(
         """INSERT INTO projeto
-           (id_projeto_externo, nome, empresa, status, id_status, matricula_gp,
+           (id_projeto_externo, nome, empresa, id_status, matricula_gp,
             id_filial, cenario1, cenario2, cenario3, arquivo_origem, criado_na_ferramenta)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,0)""",
         (
-            proj["id_projeto_externo"], proj["nome"], proj["empresa"], proj["status"],
-            proj["id_status"], proj["matricula_gp"], proj["id_filial"],
+            proj["id_projeto_externo"], proj["nome"], proj["empresa"],
+            id_status, proj["matricula_gp"], proj["id_filial"],
             proj["cenario1"], proj["cenario2"], proj["cenario3"],
             path,
         ),
@@ -306,13 +308,14 @@ def _insert_projeto(cur, proj: dict, path: str, periodos: list[str]) -> int:
 def _update_projeto(cur, projeto_id: int, proj: dict, path: str, periodos: list[str]) -> None:
     """Projeto já existe (veio do BI ou de um import anterior): atualiza os campos e a
     janela de meses com o arquivo; NÃO mexe na baseline."""
+    id_status = dbmod.resolver_id_status(cur.connection, proj["status"], proj["id_status"])
     cur.execute(
         """UPDATE projeto SET
-             nome=?, empresa=?, status=?, id_status=?, matricula_gp=?, id_filial=?,
+             nome=?, empresa=?, id_status=?, matricula_gp=?, id_filial=?,
              cenario1=?, cenario2=?, cenario3=?, arquivo_origem=?
            WHERE projeto_id=?""",
         (
-            proj["nome"], proj["empresa"], proj["status"], proj["id_status"],
+            proj["nome"], proj["empresa"], id_status,
             proj["matricula_gp"], proj["id_filial"],
             proj["cenario1"], proj["cenario2"], proj["cenario3"], path, projeto_id,
         ),

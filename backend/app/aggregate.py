@@ -5,15 +5,22 @@ import datetime as _dt
 import sqlite3
 
 
-def periodos_union(conn: sqlite3.Connection) -> list[str]:
-    """Todos os meses visíveis: janela configurada de qualquer projeto +
-    qualquer mês que já tenha horas lançadas (inclusive fora da janela)."""
-    rows = conn.execute(
-        """SELECT periodo FROM projeto_periodo
-           UNION
-           SELECT periodo FROM alocacao_mes
-           ORDER BY periodo"""
-    ).fetchall()
+def periodos_union(
+    conn: sqlite3.Connection, periodo_inicial: str | None = None, periodo_final: str | None = None
+) -> list[str]:
+    """Meses visíveis: janela configurada de qualquer projeto + qualquer mês que já
+    tenha horas lançadas (inclusive fora da janela), recortado pelo filtro de período
+    da tela (docs/ESPECIFICACAO.md §8 "Filtros da tela"). `periodo_final=None` é
+    "aberto" de verdade — vai até o último mês com dado, sem sentinela nenhuma."""
+    q = "SELECT periodo FROM projeto_periodo UNION SELECT periodo FROM alocacao_mes"
+    cond, args = [], []
+    if periodo_inicial:
+        cond.append("periodo >= ?"); args.append(periodo_inicial)
+    if periodo_final:
+        cond.append("periodo <= ?"); args.append(periodo_final)
+    if cond:
+        q = f"SELECT periodo FROM ({q}) WHERE {' AND '.join(cond)}"
+    rows = conn.execute(q + " ORDER BY periodo", args).fetchall()
     return [r["periodo"] for r in rows]
 
 
@@ -110,8 +117,28 @@ def _horas_por_alocacao(conn: sqlite3.Connection) -> dict[int, dict[str, int]]:
     return out
 
 
-def build_grade(conn: sqlite3.Connection) -> dict:
-    periodos = periodos_union(conn)
+def build_grade(
+    conn: sqlite3.Connection,
+    periodo_inicial: str | None = None,
+    periodo_final: str | None = None,
+    periodo_ativo: bool = True,
+) -> dict:
+    """Filtro de período (docs/ESPECIFICACAO.md §8) — substitui o antigo "só ativos".
+    `periodo_inicial` default = mês atual; `periodo_final` default = aberto (None de
+    verdade, nunca sentinela). Linha (projeto/pessoa/alocação) some da tela só se
+    NENHUM mês dentro de [periodo_inicial, periodo_final] tiver hora dela — mesmo
+    critério das colunas, então nunca existe total visível sem a linha que o explica.
+    `periodo_ativo=False` desliga o filtro inteiro (mostra tudo, sem corte nenhum) —
+    equivale a período inicial TAMBÉM aberto, não só "não configurado ainda"; por isso é
+    um parâmetro à parte, e não apenas `periodo_inicial=None` (que continua significando
+    "não veio nada do cliente, usa o padrão de hoje")."""
+    hoje = _dt.date.today().replace(day=1).isoformat()
+    if periodo_ativo:
+        periodo_inicial = periodo_inicial or hoje
+    else:
+        periodo_inicial = None
+        periodo_final = None
+    periodos = periodos_union(conn, periodo_inicial, periodo_final)
     pp = _periodos_por_projeto(conn)
     horas = _horas_por_alocacao(conn)
     cores = cor_pessoa_mes(conn, periodos)
@@ -166,15 +193,25 @@ def build_grade(conn: sqlite3.Connection) -> dict:
 
     # -- por projeto --------------------------------------------------------
     por_projeto: list[dict] = []
+    # status não é coluna própria — sempre derivado de id_status via catalogo.
     projetos = conn.execute(
-        "SELECT projeto_id, nome, matricula_gp, gestor_projetos, status, arquivo_origem, "
-        "exportado_em, alterado_em, criado_na_ferramenta FROM projeto ORDER BY nome"
+        "SELECT p.projeto_id, p.nome, p.matricula_gp, p.gestor_projetos, cat.texto AS status, "
+        "p.arquivo_origem, p.exportado_em, p.alterado_em, p.criado_na_ferramenta "
+        "FROM projeto p LEFT JOIN catalogo cat ON cat.tipo='status' AND cat.id=p.id_status "
+        "ORDER BY p.nome"
     ).fetchall()
-    hoje = _dt.date.today().replace(day=1).isoformat()
 
-    def _fut(h: dict[str, int]) -> bool:
-        """Tem hora > 0 do mês atual em diante? (linha 'histórica' se não)."""
-        return any(v > 0 and per >= hoje for per, v in h.items())
+    def _visivel_no_periodo(h: dict[str, int]) -> bool:
+        """Tem hora > 0 em algum mês dentro de [periodo_inicial, periodo_final] — o
+        MESMO critério das colunas. Substitui o antigo `_fut` (só olhava "futuro" a
+        partir de hoje e escondia linha inteira mesmo com hora real num mês passado
+        que estava sendo exibido — bug corrigido em 2026-09-12, ver Histórico)."""
+        return any(
+            v > 0
+            and (not periodo_inicial or per >= periodo_inicial)
+            and (not periodo_final or per <= periodo_final)
+            for per, v in h.items()
+        )
 
     alocs_por_proj: dict[int, list] = {}
     for a in alocs:
@@ -201,7 +238,7 @@ def build_grade(conn: sqlite3.Connection) -> dict:
                 "horas": h,
                 "cores": cores_de(a["matricula"]),
                 "removido": False,
-                "tem_horas_futuras": _fut(h),
+                "tem_horas_no_periodo": _visivel_no_periodo(h),
                 **diff(pid, a["matricula"], a["tipo_alocacao"], h),
             })
         for (mat, tipo) in removidas_por_proj.get(pid, []):
@@ -213,7 +250,7 @@ def build_grade(conn: sqlite3.Connection) -> dict:
                 "capacidade_mensal": caps.get(mat),
                 "horas": base_mes.get((pid, mat, tipo), {}),
                 "cores": {},
-                "tem_horas_futuras": _fut(base_mes.get((pid, mat, tipo), {})),
+                "tem_horas_no_periodo": _visivel_no_periodo(base_mes.get((pid, mat, tipo), {})),
                 "removido": True,   # sai zerado no próximo arquivo; fora dos totais
                 "novo": False, "alterado": [], "base_horas": base_mes.get((pid, mat, tipo), {}),
             })
@@ -228,7 +265,6 @@ def build_grade(conn: sqlite3.Connection) -> dict:
             for per, v in g["totais"].items():
                 totais[per] = totais.get(per, 0) + v
 
-        tem_futuro = any(v > 0 and per >= hoje for per, v in totais.items())
         por_projeto.append({
             "projeto_id": pid,
             "nome": pr["nome"],
@@ -236,7 +272,7 @@ def build_grade(conn: sqlite3.Connection) -> dict:
             "gestor_projetos": pr["gestor_projetos"],
             "status": pr["status"],
             "encerrado": (pr["status"] or "").strip().lower() == "encerrado",
-            "tem_futuro": tem_futuro or bool(pr["criado_na_ferramenta"]),
+            "visivel_no_periodo": _visivel_no_periodo(totais) or bool(pr["criado_na_ferramenta"]),
             "periodos_projeto": pp.get(pid, []),
             "sujo": bool(pr["alterado_em"] and (not pr["exportado_em"] or pr["alterado_em"] > pr["exportado_em"])),
             "totais": totais,
@@ -270,14 +306,14 @@ def build_grade(conn: sqlite3.Connection) -> dict:
                 "periodos_projeto": pp.get(a["projeto_id"], []),
                 "horas": h,
                 "removido": False,
-                "tem_horas_futuras": _fut(h),
+                "tem_horas_no_periodo": _visivel_no_periodo(h),
                 **diff(a["projeto_id"], matricula, a["tipo_alocacao"], h),
             })
         por_recurso.append({
             "matricula": matricula,
             "nome": nomes.get(matricula, matricula),
             "capacidade_mensal": caps.get(matricula),
-            "tem_futuro": any(v > 0 and per >= hoje for per, v in totais.items()),
+            "visivel_no_periodo": _visivel_no_periodo(totais),
             "totais": totais,
             "totais_base": base_pessoa_tot.get(matricula, {}),
             "totais_alterado": tot_diff(totais, base_pessoa_tot.get(matricula, {})),
@@ -285,4 +321,10 @@ def build_grade(conn: sqlite3.Connection) -> dict:
             "filhos": filhos,
         })
 
-    return {"periodos": periodos, "por_projeto": por_projeto, "por_recurso": por_recurso}
+    return {
+        "periodos": periodos, "por_projeto": por_projeto, "por_recurso": por_recurso,
+        # valores resolvidos (periodo_inicial default = hoje; periodo_final = None de
+        # verdade quando aberto) — a tela usa isso pra preencher os dois seletores.
+        "periodo_inicial": periodo_inicial, "periodo_final": periodo_final,
+        "periodo_ativo": periodo_ativo,
+    }

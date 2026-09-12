@@ -57,6 +57,56 @@ def test_grade_marca_alteracao_vs_baseline(conn, sample_path):
     assert f["base_horas"]["2026-07-01"] == 88
 
 
+def test_filtro_periodo_linha_visivel_so_se_coluna_visivel(conn, sample_path):
+    """docs/ESPECIFICACAO.md §8 — bug corrigido em 2026-09-12: reproduz o caso real
+    (pessoa com hora só num mês passado, nada dali em diante) que o antigo `_fut`
+    escondia inteiro mesmo com a coluna daquele mês visível na tela, deixando o total
+    do mês "fantasma" sem linha que o explicasse. A linha só pode sumir junto com a
+    coluna que a explica — nunca antes."""
+    import_workbook(conn, sample_path)
+    aid = conn.execute(
+        "SELECT alocacao_id FROM alocacao WHERE matricula='73920' AND tipo_alocacao='TecnicaANP'"
+    ).fetchone()["alocacao_id"]
+    # simula "só tem hora num mês passado, nada no futuro" (ex.: férias/desligamento).
+    conn.execute("DELETE FROM alocacao_mes WHERE alocacao_id=? AND periodo!='2026-06-01'", (aid,))
+    conn.commit()
+
+    def grade_e_filha(**kw):
+        g = build_grade(conn, **kw)
+        f = next(
+            f for grp in g["por_projeto"][0]["grupos"] for f in grp["filhos"]
+            if f["alocacao_id"] == aid
+        )
+        return g, f
+
+    # janela inclui 06/26 -> coluna e linha aparecem juntas.
+    g, f = grade_e_filha(periodo_inicial="2026-06-01")
+    assert "2026-06-01" in g["periodos"]
+    assert f["tem_horas_no_periodo"] is True
+
+    # janela começa em 07/26 -> a coluna 06/26 some, e a linha tem que sumir junto
+    # (critério idêntico ao das colunas) — é exatamente o bug que existia antes.
+    g, f = grade_e_filha(periodo_inicial="2026-07-01")
+    assert "2026-06-01" not in g["periodos"]
+    assert f["tem_horas_no_periodo"] is False
+
+
+def test_filtro_periodo_desligado_mostra_tudo(conn, sample_path):
+    """periodo_ativo=False é um estado à parte de "não configurado" — período inicial
+    fica genuinamente aberto (None), não cai no padrão de hoje."""
+    import_workbook(conn, sample_path)
+    g = build_grade(conn, periodo_ativo=False)
+    assert g["periodo_ativo"] is False
+    assert g["periodo_inicial"] is None
+    assert g["periodo_final"] is None
+    assert "2026-05-01" in g["periodos"]   # nenhum corte, mês antigo da amostra aparece
+
+    proj = g["por_projeto"][0]
+    assert proj["visivel_no_periodo"] is True
+    todos = [f for grp in proj["grupos"] for f in grp["filhos"]]
+    assert all(f["tem_horas_no_periodo"] for f in todos if any(f["horas"].values()))
+
+
 def test_grade_por_recurso_agrega_multiplos_tipos(conn, sample_path):
     import_workbook(conn, sample_path)
     # na amostra ninguém tem 2 tipos com horas > 0 (linhas zeradas não viram

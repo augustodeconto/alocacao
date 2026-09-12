@@ -12,6 +12,21 @@ def _export(conn, tmp_path, sample_path):
     return exportar_projeto(conn, 1, str(tmp_path / "out"), sample_path)
 
 
+def test_status_vira_id_status_e_volta_igual_no_export(conn, tmp_path, sample_path):
+    """projeto.status saiu do schema — id_status é a única fonte (FK "lógica" pro
+    catalogo). O arquivo de amostra tem Status='Contratado'/idStatus=4; confirma que o
+    import resolve pro id certo e o export reconstrói os dois valores originais."""
+    out = _export(conn, tmp_path, sample_path)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(projeto)")}
+    assert "status" not in cols
+    pr = conn.execute("SELECT id_status FROM projeto WHERE projeto_id=1").fetchone()
+    assert pr["id_status"] == 4
+
+    dp = Workbook(out).sheet("dados_projeto")
+    assert dp.cell(2, 4) == "Contratado"   # Status
+    assert dp.cell(2, 5) == 4              # idStatus
+
+
 def test_export_comeca_no_mes_da_geracao(conn, tmp_path, sample_path):
     out = _export(conn, tmp_path, sample_path)
     hoje = dt.date.today().replace(day=1)

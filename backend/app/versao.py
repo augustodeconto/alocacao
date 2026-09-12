@@ -21,7 +21,9 @@ import json as _json
 import sqlite3
 
 PROJETO_COLS = [
-    "nome", "empresa", "status", "id_status", "matricula_gp", "id_filial",
+    # "status" (texto) saiu — id_status é a FK "lógica" pro catalogo(tipo='status'),
+    # texto é sempre derivado via join (aggregate.py/xlsx_export.py), nunca guardado cru.
+    "nome", "empresa", "id_status", "matricula_gp", "id_filial",
     "cenario1", "cenario2", "cenario3", "gestor_projetos",
 ]
 def _nome_cenario(nome: str) -> str:
