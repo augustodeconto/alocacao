@@ -225,6 +225,36 @@ Re‑materializa working de `head_.base_commit_id` (passo 2–3 do checkout, sem
 É o atual "↺ Descartar". O "descartar só este projeto" continua como conveniência (materializa
 só as chaves daquele `projeto_id`).
 
+### `resetar(ref, commit_id)` — equivale a `git reset --soft`, decidido em 2026-09-12
+Move o **topo de uma branch** de volta pra um commit ancestral, trazendo o que foi desfeito
+de volta como alteração **pendente** (não perde nada — vira "editável de novo"). Nasceu de
+um caso real: consolidar por engano na branch errada (`BI`/Publicado) e querer desfazer sem
+perder o conteúdo editado.
+
+1. Só é permitido em `commit_id` que seja **ancestral do topo atual** de `ref` (senão
+   `KeyError`/erro claro — não é "mover pra frente").
+2. Exige **working limpo**, igual `checkout` — evita ambiguidade entre "minha pendência
+   normal" e "o que voltou do reset".
+3. `d = diff(commit_id, tip_atual)` — reusa exatamente o cálculo que já existe pra "comparar
+   dois commits" na tela.
+4. `UPDATE ref_ SET commit_id = ?` pra `ref` apontar pro alvo. Se `ref` é a branch
+   checked-out (`head_.ref_nome`), `head_.base_commit_id` também recua.
+5. Reaplica `d` em cima do working (`aplicar_delta`, já existe — é o mesmo usado no
+   reancoramento pós-import do BI) e recalcula o cache (`_cache_set`) contra o **novo** HEAD
+   (`commit_id`) — é isso que faz a tela mostrar o conteúdo desfeito como alteração pendente
+   de verdade (triângulo, "novo"), e não como se já estivesse consolidado.
+6. Sem variante "hard" (que descartaria o conteúdo em vez de devolver como pendência) — não
+   foi pedida; se um dia for, é uma operação à parte, mais perigosa.
+
+UI: menu de contexto de um **commit** no grafo, só aparece quando o commit é ancestral do
+topo da branch **atualmente aberta**. Rótulo "↩ Voltar '<cenário>' pra esta versão", tooltip
+"As versões entre aqui e o topo saem do histórico e voltam como alterações pendentes.
+(reset)" — nomenclatura de UI segue `docs/TERMINOLOGIA.md`. Confirmação obrigatória antes de
+executar, mostrando quais versões serão desfeitas (reusa o componente de diff que já existe).
+Operação de reescrita de histórico numa branch compartilhada — quando o enforcement de papel
+entrar (`docs/COLABORACAO.md`), deveria ficar restrita a `coordenador`/`admin`, junto com
+`merge` pra `main`/Principal.
+
 ### `log(ref, limite)`
 Caminha `commit_` a partir de `ref_(ref).commit_id` por `parent_id`.
 

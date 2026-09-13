@@ -398,6 +398,11 @@ td.cell input {
 .ver-cur b { color: var(--fg); }
 .ver-cur .lock { color: var(--muted); }
 .ver-cur .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+/* badge do cenário atual fora da tela Versões (toolbars de Alocação/Cadastros) —
+   mesmo indicador, só que clicável, leva pra Versões. */
+.ver-cur.clicavel { cursor: pointer; padding: 3px 8px; border-radius: 5px; }
+.ver-cur.clicavel:hover, .ver-cur.clicavel:focus-visible { background: var(--sel); color: var(--fg); }
+.ver-cur.clicavel:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 #ver-merge-banner {
   flex: 0 0 auto; padding: 8px 14px; font-size: 12.5px;
   background: color-mix(in srgb, var(--accent) 14%, var(--head-bg));

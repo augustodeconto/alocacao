@@ -829,6 +829,26 @@ def versao_checkout(payload: dict = Body(...)):
         return {"estado": _estado()}
 
 
+@app.post("/api/versao/resetar")
+def versao_resetar(payload: dict = Body(...)):
+    ref = str(payload.get("ref") or "").strip()
+    commit_id = payload.get("commit_id")
+    if not ref or commit_id is None:
+        raise HTTPException(422, "ref e commit_id são obrigatórios")
+    with _lock:
+        try:
+            versao.resetar(_conn, ref, int(commit_id))
+        except versao.VersaoSuja as e:
+            raise HTTPException(409, str(e))
+        except versao.MergeEmAndamento as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except KeyError:
+            raise HTTPException(404, f"branch '{ref}' não existe")
+        return {"estado": _estado()}
+
+
 @app.delete("/api/versao/branch/{nome}")
 def versao_deletar_branch(nome: str):
     with _lock:

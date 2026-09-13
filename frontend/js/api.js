@@ -89,6 +89,7 @@ export const api = {
       nome, a_partir: a_partir || null, trocar: !!trocar, mover_pendencias: !!mover_pendencias,
     }),
   versaoCheckout: (ref) => req("POST", "/api/versao/checkout", { ref }),
+  versaoResetar: (ref, commit_id) => req("POST", "/api/versao/resetar", { ref, commit_id }),
   versaoDeletarBranch: (nome) => req("DELETE", `/api/versao/branch/${encodeURIComponent(nome)}`),
   versaoMerge: (origem) => req("POST", "/api/versao/merge", { origem }),
   versaoMergeConcluir: (mensagem) => req("POST", "/api/versao/merge/concluir", { mensagem }),

@@ -526,6 +526,16 @@ function abrirAjusteAlocacao(cells, ev) {
   const outras = (c) => totalPessoaNoMes(c.matricula, c.periodo) - horasAtual(c.alocacaoId, c.periodo);
   const alvo = (c, pct) => Math.max(0, Math.round(c.cap * pct / 100 - outras(c)));
 
+  // DIAGNÓSTICO TEMPORÁRIO (2026-09-12) — bug relatado: níveis mostram os mesmos
+  // valores em células/pessoas diferentes. Tirar assim que reproduzir com o console
+  // aberto e identificar onde diverge (ver mensagem cross-session de alocacao-9d).
+  console.log("abrirAjusteAlocacao debug:", validas.map((c) => ({
+    alocacaoId: c.alocacaoId, periodo: c.periodo, matricula: c.matricula, cap: c.cap,
+    horasAtualDestaCelula: horasAtual(c.alocacaoId, c.periodo),
+    totalPessoaNoMes: totalPessoaNoMes(c.matricula, c.periodo),
+    outras: outras(c),
+  })));
+
   const aplicar = async (pct) => {
     const edits = validas.map((c) => ({
       alocacao_id: c.alocacaoId, periodo: c.periodo,
@@ -577,6 +587,8 @@ function abrirAjusteAlocacao(cells, ev) {
 
 function _render() {
   renderUsuarioBadge();
+  renderBranchBadge($("#branch-badge-alloc"), S.estado.versao);
+  renderBranchBadge($("#branch-badge-cad"), S.estado.versao);
   const sp = { pl: panelProj.scrollLeft, pt: panelProj.scrollTop, rl: panelRec.scrollLeft, rt: panelRec.scrollTop };
   PERIODOS = computePeriodos();
   refreshGpFilter();
@@ -1924,6 +1936,21 @@ function ggEdge(x0, y0, x1, y1) {
   return `M${x0} ${y0}C${x0} ${my},${x1} ${my},${x1} ${y1}`;
 }
 
+// indicador de cenário atual — compartilhado entre o `#ver-cur` de dentro da tela
+// Versões (só informativo) e os badges clicáveis nas toolbars de Alocação/Cadastros
+// (`info` = qualquer objeto com {branch, protegida}: serve tanto pra VER.grafo quanto
+// pra S.estado.versao, que têm exatamente essa forma — ver versao.estado_repo).
+function renderBranchBadge(elCur, info) {
+  if (!elCur || !info) return;
+  elCur.innerHTML = "";
+  elCur.append(
+    el("span", { className: "dot", style: info.protegida ? "background:var(--muted)" : "" }),
+    document.createTextNode(" em: "),
+    el("b", {}, nomeCenario(info.branch)),
+    info.protegida ? el("span", { className: "lock", title: "Principal é protegida — não recebe versão direta; salve num cenário" }, " 🔒") : "",
+  );
+}
+
 function paintVer() {
   const g = VER.grafo;
   const body = $("#ver-body");
@@ -1931,14 +1958,7 @@ function paintVer() {
   for (const r of g.refs) (refsPorCommit[r.commit_id] ||= []).push(r.nome);
 
   // indicador da branch atual (sem ação — troca é pelo botão direito)
-  const cur = $("#ver-cur");
-  cur.innerHTML = "";
-  cur.append(
-    el("span", { className: "dot", style: g.protegida ? "background:var(--muted)" : "" }),
-    document.createTextNode(" em: "),
-    el("b", {}, nomeCenario(g.branch)),
-    g.protegida ? el("span", { className: "lock", title: "Principal é protegida — não recebe versão direta; salve num cenário" }, " 🔒") : "",
-  );
+  renderBranchBadge($("#ver-cur"), g);
 
   const pend = g.pendente || {};
   const totalPend = (pend.projeto || 0) + (pend.pessoa || 0) + (pend.alocacoes_novas || 0)
@@ -2251,7 +2271,7 @@ function ctxMenu(items, ev) {
     if (it.sep) { m.append(el("div", { className: "sep" })); continue; }
     m.append(el("button", {
       className: it.danger ? "danger" : "", disabled: !!it.disabled,
-      textContent: it.label,
+      textContent: it.label, title: it.title || "",
       onclick: () => { hideCtx(); it.onClick && it.onClick(); },
     }));
   }
@@ -2262,6 +2282,62 @@ function ctxMenu(items, ev) {
 }
 function hideCtx() { const m = $("#ver-ctx"); if (m) m.hidden = true; }
 
+// commit_id é ancestral (ou o próprio topo) da branch aberta agora (g.head_commit)?
+// Segue parent_id E merge_parent_id (mesma ideia de versao._ancestrais, só que sobre
+// a lista de commits que já veio no grafo, sem round-trip novo ao servidor).
+function ehAncestralDoTopo(g, commitId) {
+  const porId = new Map(g.commits.map((c) => [c.commit_id, c]));
+  const vistos = new Set();
+  const fila = [g.head_commit];
+  while (fila.length) {
+    const x = fila.shift();
+    if (x === commitId) return true;
+    if (x == null || vistos.has(x)) continue;
+    vistos.add(x);
+    const c = porId.get(x);
+    if (!c) continue;
+    if (c.parent_id != null) fila.push(c.parent_id);
+    if (c.merge_parent_id != null) fila.push(c.merge_parent_id);
+  }
+  return false;
+}
+
+async function verResetar(c) {
+  const g = VER.grafo;
+  // lista as versões que saem do histórico — segue só o 1º pai (mesmo critério de
+  // materializar/checkout), do topo atual até (exclusive) o alvo do reset.
+  const porId = new Map(g.commits.map((cc) => [cc.commit_id, cc]));
+  const cadeia = [];
+  let x = g.head_commit;
+  while (x != null && x !== c.commit_id) {
+    const cc = porId.get(x);
+    if (!cc) break;
+    cadeia.push(cc);
+    x = cc.parent_id;
+  }
+  let resumoTxt = "";
+  try {
+    const { resumo: r } = await api.versaoDiff(c.commit_id, g.head_commit);
+    const partes = [];
+    if (r.projetos) partes.push(`${r.projetos} projeto(s)`);
+    if (r.pessoas) partes.push(`${r.pessoas} pessoa(s)`);
+    if (r.celulas) partes.push(`${r.celulas} célula(s)`);
+    if (r.janela) partes.push(`${r.janela} janela(s)`);
+    if (partes.length) resumoTxt = `\n\nNo total: ${partes.join(", ")}.`;
+  } catch { /* confirmação segue sem o resumo se o diff falhar */ }
+  const lista = cadeia.map((cc) => `#${cc.commit_id} — ${cc.mensagem}`).join("\n") || "(nenhuma — já é o topo)";
+  const ok = confirm(
+    `Voltar "${nomeCenario(g.branch)}" pra #${c.commit_id} ("${c.mensagem}")?\n\n` +
+    `Estas versões saem do histórico e voltam como alterações pendentes (nada se perde):\n${lista}${resumoTxt}`
+  );
+  if (!ok) return;
+  try {
+    await api.versaoResetar(g.branch, c.commit_id);
+    await recarregar();
+    log(`"${nomeCenario(g.branch)}" voltou pra #${c.commit_id}`);
+  } catch (err) { avisarErroVersao(err, "voltar pra uma versão anterior"); }
+}
+
 function ctxCommit(c, ev) {
   const g = VER.grafo;
   const brs = g.refs.filter((r) => r.commit_id === c.commit_id).map((r) => r.nome);
@@ -2270,6 +2346,12 @@ function ctxCommit(c, ev) {
     if (nome !== g.branch)
       items.push({ label: `↪ Abrir "${nomeCenario(nome)}"`, onClick: () => verCheckout(nome) });
   items.push({ label: "⑂ Criar cenário aqui…", onClick: () => criarBranchDe(c) });
+  if (c.commit_id !== g.head_commit && ehAncestralDoTopo(g, c.commit_id))
+    items.push({
+      label: `↩ Voltar "${nomeCenario(g.branch)}" pra esta versão`,
+      title: "As versões entre aqui e o topo saem do histórico e voltam como alterações pendentes. (reset)",
+      onClick: () => verResetar(c),
+    });
   items.push({ sep: true });
   items.push({ label: "⇆ Ver alterações (vs pai)",
     onClick: () => selecionarVer({ de: null, para: c.commit_id }) });
@@ -2371,10 +2453,22 @@ async function verNovaBranch() {
   try { await api.versaoBranch(nome.trim(), null, false, true); await recarregar(); log(`agora em "${nome.trim()}"`); }
   catch (err) { log(err.message, true); }
 }
+// Erro de "working sujo" (checkout/resetar bloqueados) é fácil de não perceber só
+// no `#log` discreto — vira um alert() que a pessoa não deixa de ver. Detecta pela
+// mensagem porque `req()` (api.js) não repassa o status HTTP, só o texto do erro.
+function avisarErroVersao(err, acao) {
+  if (/mudanças não commitadas/.test(err.message || "")) {
+    const cenario = nomeCenario((VER.grafo && VER.grafo.branch) || "");
+    alert(`Há alterações pendentes em "${cenario}".\nConsolide uma versão ou descarte antes de ${acao}.`);
+  } else {
+    log(err.message, true);
+  }
+}
+
 async function verCheckout(ref) {
   if (!ref || ref === (VER.grafo && VER.grafo.branch)) return;
   try { await api.versaoCheckout(ref); await recarregar(); log(`agora em ${nomeCenario(ref)}`); }
-  catch (err) { log(err.message, true); }
+  catch (err) { avisarErroVersao(err, "abrir outro cenário"); }
 }
 async function verMerge(origemPre) {
   const g = VER.grafo;
@@ -2547,6 +2641,15 @@ function wire() {
   $("#rail-files").onclick = openArquivos;
   $("#rail-config").onclick = abrirConfig;
   $("#sec-resize").addEventListener("mousedown", startWResize);
+
+  // ---- badge de cenário atual (Alocação/Cadastros) — clique leva pra Versões ----
+  for (const id of ["branch-badge-alloc", "branch-badge-cad"]) {
+    const b = $("#" + id);
+    b.onclick = () => setView("ver");
+    b.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setView("ver"); }
+    };
+  }
 
   // ---- toolbar da Alocação ----
   $("#btn-unidade").onclick = toggleUnidade;

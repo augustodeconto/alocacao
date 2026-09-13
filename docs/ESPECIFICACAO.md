@@ -593,6 +593,39 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-12** — **Nova operação `resetar(ref, commit_id)` (`git reset --soft`)
+  + diálogo de bloqueio mais visível.** Nasceu de um caso real: consolidar por
+  engano na branch errada e querer desfazer sem perder o conteúdo. `versao.resetar`
+  move o topo de uma branch de volta pra um commit ancestral (`_ancestrais`, já
+  existia) e reaplica a diferença (`_delta` + `aplicar_delta`, já existiam — mesmo
+  usado no reancoramento pós-BI) por cima do novo HEAD, de forma que o conteúdo
+  desfeito volta como alteração pendente de verdade (triângulo/"novo"), nunca é
+  perdido. Endpoint `POST /api/versao/resetar`. UI: item novo no menu de contexto de
+  um commit no grafo — "↩ Voltar '<cenário>' pra esta versão" — só aparece quando o
+  commit é ancestral do topo da branch aberta; confirmação obrigatória lista as
+  versões desfeitas + resumo (reaproveita `GET /api/versao/diff`). Sem variante
+  "hard" — não foi pedida. Gate de papel (`coordenador`/`admin`, igual merge pra
+  Principal) fica pendente junto do resto do enforcement (ver `docs/COLABORACAO.md`
+  "Superfície de enforcement") — nada de enforcement existe ainda. Documentado em
+  `docs/VERSIONAMENTO.md` antes da implementação. De quebra, o erro de "working
+  sujo" em checkout/resetar deixou de ser só uma linha discreta no `#log` e virou um
+  `alert()` visível. 2 testes novos (`test_resetar_*`); suíte completa (68) verde.
+- **2026-09-12** — **Bug corrigido: checkout deixava pessoa de outro cenário
+  pendurada como pendência.** Achado: criar uma pessoa nova num cenário, commitar, e
+  trocar pra outro cenário (ex. Principal) que nunca teve essa pessoa mostrava "N
+  alterações não salvas" mesmo sem edição nenhuma feita ali — `escrever_working`
+  (`versao.py`) faz upsert de pessoa mas nunca apaga linha (documentado assim de
+  propósito), então a pessoa criada no cenário de origem ficava na tabela viva depois
+  do checkout, sobrando como "ADICIONADA" ao comparar com o cache do novo cenário
+  (que corretamente não a tem). O mesmo padrão explicava a pessoa reservada `SISTEMA`
+  aparecer como pendência em cenários cujo histórico não a inclui. Correção:
+  `_limpar_pessoas_orfas` remove, só em checkout/descarte completo, pessoas que (a)
+  não pertencem ao commit de destino (nem em `E["pessoa"]` nem referenciadas por
+  `E["alocacao"]`) e (b) já passaram pelo versionamento em algum commit — protege
+  quem nunca foi versionada (pode ser gente real ainda não estafada em projeto
+  nenhum) e a própria `SISTEMA`, que também passou a ser ignorada na comparação de
+  pendência (como já acontecia com `papel`/`apelido`). 2 testes novos em
+  `test_versao.py`; suíte completa (66 testes) verde.
 - **2026-09-12** — **Ação de commit: "Salvar versão" → "Consolidar alterações".**
   `docs/TERMINOLOGIA.md` §8.1/§19/§20 atualizados — "salvar" ficava ambíguo (as horas já
   estão persistidas no banco antes do commit; "consolidar" comunica melhor que é um ponto

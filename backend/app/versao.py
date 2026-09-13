@@ -66,7 +66,11 @@ def _estado_working(conn: sqlite3.Connection) -> dict:
     e = {"projeto": {}, "pessoa": {}, "alocacao": {}, "mes": {}, "periodo": {}}
     for r in conn.execute(f"SELECT projeto_id, {','.join(PROJETO_COLS)} FROM projeto"):
         e["projeto"][r["projeto_id"]] = {c: r[c] for c in PROJETO_COLS}
-    for r in conn.execute(f"SELECT matricula, {','.join(PESSOA_COLS)} FROM pessoa"):
+    # SISTEMA é reservada e fica fora do versionamento (como papel/apelido) — é
+    # recriada direto na tabela a cada início do servidor (db._migrate), nunca via
+    # commit; se entrasse aqui apareceria como pendência perpétua (ver Histórico
+    # 2026-09-12 "checkout deixa pessoa de outro branch pendurada").
+    for r in conn.execute(f"SELECT matricula, {','.join(PESSOA_COLS)} FROM pessoa WHERE matricula != 'SISTEMA'"):
         e["pessoa"][r["matricula"]] = {c: r[c] for c in PESSOA_COLS}
     for r in conn.execute("SELECT projeto_id, matricula, tipo_alocacao FROM alocacao"):
         e["alocacao"][(r["projeto_id"], r["matricula"], r["tipo_alocacao"])] = True
@@ -84,7 +88,10 @@ def _estado_cache(conn: sqlite3.Connection) -> dict:
     e = {"projeto": {}, "pessoa": {}, "alocacao": {}, "mes": {}, "periodo": {}}
     for r in conn.execute(f"SELECT projeto_id, {','.join(PROJETO_COLS)} FROM base_projeto"):
         e["projeto"][r["projeto_id"]] = {c: r[c] for c in PROJETO_COLS}
-    for r in conn.execute(f"SELECT matricula, {','.join(PESSOA_COLS)} FROM base_pessoa"):
+    # simétrico ao filtro de SISTEMA em _estado_working — sem isso, um commit antigo
+    # que por acidente tenha capturado SISTEMA no cache faria ela aparecer como
+    # "removida" em vez de simplesmente nunca entrar na comparação.
+    for r in conn.execute(f"SELECT matricula, {','.join(PESSOA_COLS)} FROM base_pessoa WHERE matricula != 'SISTEMA'"):
         e["pessoa"][r["matricula"]] = {c: r[c] for c in PESSOA_COLS}
     for r in conn.execute("SELECT projeto_id, matricula, tipo_alocacao FROM baseline_alocacao"):
         e["alocacao"][(r["projeto_id"], r["matricula"], r["tipo_alocacao"])] = True
@@ -343,9 +350,35 @@ def escrever_working(conn: sqlite3.Connection, E: dict, escopo: int | None = Non
                          (pid, p, o))
 
 
+def _limpar_pessoas_orfas(conn: sqlite3.Connection, E: dict) -> None:
+    """Bug corrigido em 2026-09-12: `escrever_working` faz upsert de pessoa (nunca
+    apaga — ver docstring dela), então uma pessoa criada e commitada num branch
+    ficava pendurada na tabela `pessoa` depois de trocar pra outro branch que nunca
+    teve essa pessoa, aparecendo como "ADICIONADA" pendente sem edição nenhuma ter
+    sido feita ali.
+
+    Só é seguro apagar quem: (a) não faz parte deste checkout (nem em `E["pessoa"]`
+    nem referenciada por `E["alocacao"]`) E (b) já passou pelo versionamento em
+    ALGUM commit (`chg_pessoa`) — ou seja, foi criada pelo fluxo normal do app, só
+    que num branch irmão. Pessoa semeada direto pelo BI (nunca aparece em
+    `chg_pessoa` em commit nenhum) nunca é tocada aqui, mesmo sem alocação
+    nenhuma agora — pode ser gente real ainda não estafada em nenhum projeto, e
+    nenhum checkout futuro traria ela de volta (não existe em nenhum E["pessoa"]).
+    SISTEMA é reservada e nem entra na conta (ver _estado_working)."""
+    relevantes = set(E["pessoa"]) | {mat for (_pid, mat, _tipo) in E["alocacao"]}
+    ja_versionadas = {
+        r["matricula"] for r in conn.execute("SELECT DISTINCT matricula FROM chg_pessoa")
+    }
+    orfas = (ja_versionadas - relevantes) - {"SISTEMA"}
+    if orfas:
+        conn.executemany("DELETE FROM pessoa WHERE matricula=?", [(m,) for m in orfas])
+
+
 def aplicar_ao_working(conn: sqlite3.Connection, E: dict, escopo: int | None = None) -> None:
     """Escreve E no working **e** no cache (usado por checkout / descartar)."""
     escrever_working(conn, E, escopo)
+    if escopo is None:   # só em checkout/descarte completo — parcial nunca mexe em pessoa
+        _limpar_pessoas_orfas(conn, E)
     _cache_set(conn, E, escopo)
 
 
@@ -517,6 +550,41 @@ def descartar(conn: sqlite3.Connection, projeto_id: int | None = None) -> None:
         conn.execute("UPDATE projeto SET alterado_em=NULL")
     else:
         conn.execute("UPDATE projeto SET alterado_em=NULL WHERE projeto_id=?", (projeto_id,))
+    conn.commit()
+
+
+def resetar(conn: sqlite3.Connection, ref: str, commit_id: int) -> None:
+    """`git reset --soft`: move o TOPO de `ref` de volta pra um commit ancestral,
+    trazendo de volta o que foi desfeito como alteração PENDENTE — nunca perde
+    conteúdo, só devolve pra edição (vira "novo"/triângulo de novo, não fica como se
+    já estivesse consolidado). Nasceu de um caso real: consolidar por engano numa
+    branch errada e querer desfazer sem perder o que foi editado. Ver
+    docs/VERSIONAMENTO.md "resetar(ref, commit_id)". Sem variante "hard" (que
+    descartaria o conteúdo em vez de devolver como pendência) — não foi pedida."""
+    _sem_merge(conn)
+    r = conn.execute("SELECT commit_id FROM ref_ WHERE nome=?", (ref,)).fetchone()
+    if r is None:
+        raise KeyError(ref)
+    tip_atual = r["commit_id"]
+    if commit_id == tip_atual or commit_id not in _ancestrais(conn, tip_atual):
+        raise ValueError(f"#{commit_id} precisa ser uma versão anterior de '{ref}' no histórico")
+    if sujo(conn):
+        raise VersaoSuja("há mudanças não commitadas — faça commit ou descarte antes")
+
+    E_novo = materializar(conn, commit_id)
+    # o que existe no topo atual e não em `commit_id` — isso é o que "sai do
+    # histórico" e precisa reaparecer como pendência de verdade.
+    d = _delta(E_novo, materializar(conn, tip_atual))
+
+    conn.execute("UPDATE ref_ SET commit_id=? WHERE nome=?", (commit_id, ref))
+    h = _head(conn)
+    if h["ref_nome"] == ref:
+        conn.execute("UPDATE head_ SET base_commit_id=? WHERE id=1", (commit_id,))
+
+    E_working = aplicar_delta(E_novo, d)
+    escrever_working(conn, E_working, escopo=None)
+    _limpar_pessoas_orfas(conn, E_working)
+    _cache_set(conn, E_novo, escopo=None)   # cache = NOVO head -> `d` aparece como pendência
     conn.commit()
 
 

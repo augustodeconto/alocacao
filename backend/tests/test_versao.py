@@ -57,6 +57,61 @@ def test_checkout_bloqueia_com_working_sujo(conn, sample_path):
         versao.checkout(conn, "outra")
 
 
+def test_resetar_move_topo_e_devolve_conteudo_como_pendencia(conn, sample_path):
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+    base_id = versao.tip_commit(conn, "main")
+    base_julho = _julho(conn)
+
+    conn.execute("UPDATE alocacao_mes SET horas = horas + 10 WHERE periodo='2026-07-01'")
+    conn.commit()
+    versao.commit(conn, "sobe julho")
+    depois_julho = _julho(conn)
+    assert depois_julho != base_julho
+
+    versao.resetar(conn, "main", base_id)
+
+    assert versao.tip_commit(conn, "main") == base_id       # topo voltou
+    h = conn.execute("SELECT * FROM head_ WHERE id=1").fetchone()
+    assert h["base_commit_id"] == base_id                   # head também (main é a branch aberta)
+    assert _julho(conn) == depois_julho                     # conteúdo NÃO se perdeu no working...
+    assert versao.sujo(conn)                                # ...mas volta como pendência de verdade
+    d = versao.diff_pendente(conn)
+    assert d["mes"]                                          # a célula de julho aparece no diff
+
+    # dá pra commitar de novo em cima do novo topo, normalmente
+    novo_id = versao.commit(conn, "sobe julho de novo")
+    assert conn.execute(
+        "SELECT parent_id FROM commit_ WHERE commit_id=?", (novo_id,)
+    ).fetchone()["parent_id"] == base_id
+
+
+def test_resetar_exige_ancestral_e_working_limpo(conn, sample_path):
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+    base_id = versao.tip_commit(conn, "main")
+
+    versao.branch(conn, "lado", trocar=True)
+    conn.execute("UPDATE alocacao_mes SET horas = 999 WHERE periodo='2026-07-01'")
+    conn.commit()
+    lado_id = versao.commit(conn, "lado")
+
+    versao.checkout(conn, "main")
+    with pytest.raises(ValueError):
+        versao.resetar(conn, "main", lado_id)    # não é ancestral de main
+    with pytest.raises(ValueError):
+        versao.resetar(conn, "main", base_id)    # base_id == topo atual, não é "voltar"
+
+    conn.execute("UPDATE alocacao_mes SET horas = 1 WHERE periodo='2026-08-01'")
+    conn.commit()
+    versao.commit(conn, "avança main")           # agora base_id é ancestral de verdade do topo
+
+    conn.execute("UPDATE alocacao_mes SET horas = 2 WHERE periodo='2026-08-01'")
+    conn.commit()
+    with pytest.raises(versao.VersaoSuja):
+        versao.resetar(conn, "main", base_id)    # working sujo bloqueia, igual checkout
+
+
 def test_descartar_volta_ao_head(conn, sample_path):
     import_workbook(conn, sample_path)
     versao.commit(conn, "base")
@@ -206,6 +261,45 @@ def test_commit_bloqueado_durante_merge(conn, sample_path):
         versao.commit(conn, "não pode")
     with pytest.raises(versao.MergeEmAndamento):
         versao.checkout(conn, "E")
+
+
+def test_checkout_nao_deixa_pessoa_de_outro_branch_pendurada(conn, sample_path):
+    """Bug real corrigido em 2026-09-12: criar uma pessoa nova num branch, commitar,
+    e trocar pra um branch que nunca teve essa pessoa mostrava "1 alteração não
+    salva" (a pessoa "ADICIONADA") mesmo sem nenhuma edição feita ali — porque
+    escrever_working faz upsert de pessoa mas nunca apaga (docstring dela), então a
+    linha ficava pendurada na tabela viva depois do checkout."""
+    import_workbook(conn, sample_path)
+    versao.commit(conn, "base")
+
+    versao.branch(conn, "cenario", trocar=True)
+    conn.execute("INSERT INTO pessoa (matricula, nome) VALUES ('99999', 'joao da silva')")
+    conn.commit()
+    versao.commit(conn, "nova pessoa")
+
+    versao.checkout(conn, "main")
+    assert not versao.sujo(conn)   # não pode sobrar pendência só por causa do checkout
+    assert conn.execute("SELECT 1 FROM pessoa WHERE matricula='99999'").fetchone() is None
+
+    # e volta a existir ao reabrir o branch onde ela pertence de fato
+    versao.checkout(conn, "cenario")
+    assert not versao.sujo(conn)
+    assert conn.execute("SELECT nome FROM pessoa WHERE matricula='99999'").fetchone()["nome"] == "joao da silva"
+
+
+def test_checkout_preserva_pessoa_sem_alocacao_que_pertence_ao_proprio_commit(conn, sample_path):
+    """Uma pessoa cadastrada (e commitada) sem nenhuma alocação — ainda não estafada
+    em projeto nenhum — não pode ser apagada por um checkout pro MESMO commit em que
+    foi criada: ela pertence a E["pessoa"] mesmo sem aparecer em E["alocacao"]. Só é
+    candidata a limpeza quem NÃO pertence ao commit de destino (ver teste acima)."""
+    import_workbook(conn, sample_path)
+    conn.execute("INSERT INTO pessoa (matricula, nome) VALUES ('88888', 'sem alocacao ainda')")
+    conn.commit()
+    versao.commit(conn, "cadastra pessoa sem projeto")
+
+    versao.checkout(conn, "main")   # reabre o mesmo commit em que ela foi criada
+    assert not versao.sujo(conn)
+    assert conn.execute("SELECT 1 FROM pessoa WHERE matricula='88888'").fetchone() is not None
 
 
 def test_nao_apaga_main_nem_branch_atual(conn):
