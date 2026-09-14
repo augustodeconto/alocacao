@@ -117,6 +117,140 @@ def _horas_por_alocacao(conn: sqlite3.Connection) -> dict[int, dict[str, int]]:
     return out
 
 
+def _diff_context(conn: sqlite3.Connection) -> dict:
+    """Estruturas de baseline (último commit) — extraídas de `build_grade` em
+    2026-09-12 pra ficarem compartilhadas com `impacto_edicao` (docs/PERFORMANCE.md),
+    sem duplicar a regra de "o que é novo/alterado vs. baseline"."""
+    base_exists: set[tuple] = {
+        (r["projeto_id"], r["matricula"], r["tipo_alocacao"])
+        for r in conn.execute("SELECT projeto_id, matricula, tipo_alocacao FROM baseline_alocacao")
+    }
+    base_mes: dict[tuple, dict[str, int]] = {}
+    base_proj_tot: dict[int, dict[str, int]] = {}
+    base_grupo_tot: dict[tuple, dict[str, int]] = {}
+    base_pessoa_tot: dict[str, dict[str, int]] = {}
+    for r in conn.execute("SELECT projeto_id, matricula, tipo_alocacao, periodo, horas FROM baseline_alocacao_mes"):
+        pid, mat, tipo, per, h = (
+            r["projeto_id"], r["matricula"], r["tipo_alocacao"], r["periodo"], r["horas"]
+        )
+        base_mes.setdefault((pid, mat, tipo), {})[per] = h
+        for d in (base_proj_tot.setdefault(pid, {}),
+                  base_grupo_tot.setdefault((pid, tipo), {}),
+                  base_pessoa_tot.setdefault(mat, {})):
+            d[per] = d.get(per, 0) + h
+
+    def diff(pid: int, mat: str, tipo: str, h: dict[str, int]) -> dict:
+        """novo? / lista de meses alterados / valores da baseline (p/ tooltip)."""
+        key = (pid, mat, tipo)
+        bh = base_mes.get(key, {})
+        alterado = sorted(p for p in set(h) | set(bh) if h.get(p, 0) != bh.get(p, 0))
+        return {"novo": key not in base_exists, "alterado": alterado, "base_horas": bh}
+
+    return {
+        "base_exists": base_exists, "base_mes": base_mes, "base_proj_tot": base_proj_tot,
+        "base_grupo_tot": base_grupo_tot, "base_pessoa_tot": base_pessoa_tot, "diff": diff,
+    }
+
+
+def impacto_edicao(conn: sqlite3.Connection, tocados: list[tuple[int, str]]) -> dict:
+    """Árvore de impacto de uma edição de célula(s) — ver docs/PERFORMANCE.md.
+    `tocados` = [(alocacao_id, periodo), ...] realmente escritos na requisição.
+
+    Só é válido quando nenhuma `alocacao` foi criada ou removida por esta edição —
+    a linha já existia antes e continua existindo depois, só o valor de uma ou mais
+    células dela (e o que isso propaga) mudou. `main.py` decide isso e cai pro
+    `_estado()` completo no caso raro de criação/remoção de linha (mais barato e
+    seguro do que tentar corrigir a árvore renderizada no cliente por cima de uma
+    mudança estrutural)."""
+    if not tocados:
+        return {"alocacoes": [], "grupos": [], "projetos": [], "pessoas": []}
+
+    aids = sorted({aid for aid, _ in tocados})
+    ph = ",".join("?" * len(aids))
+    identidade = {
+        r["alocacao_id"]: (r["projeto_id"], r["matricula"], r["tipo_alocacao"])
+        for r in conn.execute(
+            f"SELECT alocacao_id, projeto_id, matricula, tipo_alocacao FROM alocacao "
+            f"WHERE alocacao_id IN ({ph})", aids,
+        )
+    }
+    horas = _horas_por_alocacao(conn)
+    ctx = _diff_context(conn)
+    periodos_tocados = sorted({per for _, per in tocados})
+    pt_set = set(periodos_tocados)
+
+    alocacoes_out = []
+    for aid, per in tocados:
+        ident = identidade.get(aid)
+        if ident is None:
+            continue   # defensivo — não deveria acontecer neste caminho (ver docstring)
+        pid, mat, tipo = ident
+        h_atual = horas.get(aid, {}).get(per, 0)
+        base_val = ctx["base_mes"].get((pid, mat, tipo), {}).get(per, 0)
+        alocacoes_out.append({
+            "alocacao_id": aid, "periodo": per, "projeto_id": pid,
+            "matricula": mat, "tipo_alocacao": tipo,
+            "horas": h_atual, "base_horas": base_val, "alterado": h_atual != base_val,
+            "novo": (pid, mat, tipo) not in ctx["base_exists"],
+        })
+
+    def _somar_tocados(aids_do_grupo: list[int], base: dict[str, int]) -> tuple[dict, list]:
+        totais: dict[str, int] = {}
+        for a in aids_do_grupo:
+            for per, v in horas.get(a, {}).items():
+                if per in pt_set:
+                    totais[per] = totais.get(per, 0) + v
+        alterado = sorted(p for p in periodos_tocados if totais.get(p, 0) != base.get(p, 0))
+        return totais, alterado
+
+    grupos_tocados = sorted({(pid, tipo) for pid, mat, tipo in identidade.values()})
+    grupos_out = []
+    for pid, tipo in grupos_tocados:
+        aids_grupo = [r["alocacao_id"] for r in conn.execute(
+            "SELECT alocacao_id FROM alocacao WHERE projeto_id=? AND tipo_alocacao=?", (pid, tipo))]
+        totais, alterado = _somar_tocados(aids_grupo, ctx["base_grupo_tot"].get((pid, tipo), {}))
+        grupos_out.append({"projeto_id": pid, "tipo_alocacao": tipo, "totais": totais, "totais_alterado": alterado})
+
+    projetos_tocados = sorted({pid for pid, mat, tipo in identidade.values()})
+    projetos_out = []
+    for pid in projetos_tocados:
+        aids_proj = [r["alocacao_id"] for r in conn.execute(
+            "SELECT alocacao_id FROM alocacao WHERE projeto_id=?", (pid,))]
+        totais, alterado = _somar_tocados(aids_proj, ctx["base_proj_tot"].get(pid, {}))
+        pr = conn.execute(
+            "SELECT alterado_em, exportado_em FROM projeto WHERE projeto_id=?", (pid,)
+        ).fetchone()
+        sujo = bool(pr["alterado_em"] and (not pr["exportado_em"] or pr["alterado_em"] > pr["exportado_em"]))
+        projetos_out.append({"projeto_id": pid, "totais": totais, "totais_alterado": alterado, "sujo": sujo})
+
+    matriculas_tocadas = sorted({mat for pid, mat, tipo in identidade.values()})
+    cores = cor_pessoa_mes(conn, periodos_tocados)
+    pessoas_out = []
+    for mat in matriculas_tocadas:
+        aids_pessoa = [r["alocacao_id"] for r in conn.execute(
+            "SELECT alocacao_id FROM alocacao WHERE matricula=?", (mat,))]
+        totais, alterado = _somar_tocados(aids_pessoa, ctx["base_pessoa_tot"].get(mat, {}))
+        cores_pessoa = {per: cores[(mat, per)] for per in periodos_tocados if (mat, per) in cores}
+        # cor/total pintam TODA célula da pessoa naquele mês, mesmo em projetos que
+        # esta edição não tocou diretamente (aggregate.cor_pessoa_mes) — o cliente
+        # precisa saber quais outras linhas repintar, mesmo sem diff de valor nelas.
+        linhas = [
+            {"projeto_id": r["projeto_id"], "tipo_alocacao": r["tipo_alocacao"]}
+            for r in conn.execute(
+                "SELECT DISTINCT projeto_id, tipo_alocacao FROM alocacao WHERE matricula=?", (mat,)
+            )
+        ]
+        pessoas_out.append({
+            "matricula": mat, "totais": totais, "totais_alterado": alterado,
+            "cores": cores_pessoa, "linhas_para_repintar": linhas,
+        })
+
+    return {
+        "alocacoes": alocacoes_out, "grupos": grupos_out,
+        "projetos": projetos_out, "pessoas": pessoas_out,
+    }
+
+
 def build_grade(
     conn: sqlite3.Connection,
     periodo_inicial: str | None = None,
@@ -155,23 +289,12 @@ def build_grade(
     ).fetchall()
 
     # -- linha de base (último commit) para o diff na tela --------------------
-    base_exists: set[tuple] = {
-        (r["projeto_id"], r["matricula"], r["tipo_alocacao"])
-        for r in conn.execute("SELECT projeto_id, matricula, tipo_alocacao FROM baseline_alocacao")
-    }
-    base_mes: dict[tuple, dict[str, int]] = {}
-    base_proj_tot: dict[int, dict[str, int]] = {}
-    base_grupo_tot: dict[tuple, dict[str, int]] = {}
-    base_pessoa_tot: dict[str, dict[str, int]] = {}
-    for r in conn.execute("SELECT projeto_id, matricula, tipo_alocacao, periodo, horas FROM baseline_alocacao_mes"):
-        pid, mat, tipo, per, h = (
-            r["projeto_id"], r["matricula"], r["tipo_alocacao"], r["periodo"], r["horas"]
-        )
-        base_mes.setdefault((pid, mat, tipo), {})[per] = h
-        for d in (base_proj_tot.setdefault(pid, {}),
-                  base_grupo_tot.setdefault((pid, tipo), {}),
-                  base_pessoa_tot.setdefault(mat, {})):
-            d[per] = d.get(per, 0) + h
+    ctx = _diff_context(conn)
+    base_exists, base_mes = ctx["base_exists"], ctx["base_mes"]
+    base_proj_tot, base_grupo_tot, base_pessoa_tot = (
+        ctx["base_proj_tot"], ctx["base_grupo_tot"], ctx["base_pessoa_tot"]
+    )
+    diff = ctx["diff"]
 
     def tot_diff(cur: dict, base: dict) -> list[str]:
         return sorted(p for p in set(cur) | set(base) if cur.get(p, 0) != base.get(p, 0))
@@ -180,13 +303,6 @@ def build_grade(
     removidas_por_proj: dict[int, list[tuple]] = {}
     for (pid, mat, tipo) in base_exists - working_keys:
         removidas_por_proj.setdefault(pid, []).append((mat, tipo))
-
-    def diff(pid: int, mat: str, tipo: str, h: dict[str, int]) -> dict:
-        """novo? / lista de meses alterados / valores da baseline (p/ tooltip)."""
-        key = (pid, mat, tipo)
-        bh = base_mes.get(key, {})
-        alterado = sorted(p for p in set(h) | set(bh) if h.get(p, 0) != bh.get(p, 0))
-        return {"novo": key not in base_exists, "alterado": alterado, "base_horas": bh}
 
     def cores_de(matricula: str) -> dict[str, str]:
         return {per: cores[(matricula, per)] for per in periodos if (matricula, per) in cores}

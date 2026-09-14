@@ -454,6 +454,106 @@ function snapshot(edits) {
   }));
 }
 
+// -- resposta incremental de edição (docs/PERFORMANCE.md) ---------------
+// mes-lote/mes devolvem {impacto: ...} pro caso comum (valor de célula numa linha
+// que já existia e continua existindo) — bem mais leve que o {estado: ...} de
+// antes. Caso raro/estrutural (linha nasce ou some por completo) continua vindo
+// como {estado: ...} de volta, tratado como sempre. `aplicarImpacto` localiza só
+// os nós tocados dentro de `S.estado.grade` e atualiza em cima deles — nunca
+// recalcula regra de negócio (cor/total/diff) no cliente, só aplica o que o
+// backend já mandou pronto.
+function _grupoDe(projetoId, tipo) {
+  const proj = S.estado.grade.por_projeto.find((p) => p.projeto_id === projetoId);
+  return proj ? proj.grupos.find((g) => g.tipo_alocacao === tipo) : null;
+}
+function _pessoaRecursoDe(matricula) {
+  return S.estado.grade.por_recurso.find((r) => r.matricula === matricula);
+}
+function _mergeAlterado(atual, tocados, novosAlterados) {
+  const set = new Set((atual || []).filter((p) => !tocados.includes(p)));
+  for (const p of novosAlterados) set.add(p);
+  return [...set].sort();
+}
+function _mergeTotais(totaisAtual, tocados, novosTotais) {
+  for (const per of tocados) {
+    if (novosTotais[per] != null) totaisAtual[per] = novosTotais[per];
+    else delete totaisAtual[per];
+  }
+}
+function _mergeCores(coresAtual, tocados, novasCores) {
+  for (const per of tocados) delete coresAtual[per];
+  Object.assign(coresAtual, novasCores);
+}
+
+function aplicarImpacto(impacto) {
+  if (!impacto || !S.estado?.grade) return;
+  const tocados = [...new Set(impacto.alocacoes.map((a) => a.periodo))];
+
+  for (const a of impacto.alocacoes) {
+    const atualizaLeaf = (f) => {
+      if (!f) return;
+      if (a.horas > 0) f.horas[a.periodo] = a.horas; else delete f.horas[a.periodo];
+      f.novo = a.novo;
+      f.base_horas = { ...f.base_horas, [a.periodo]: a.base_horas };
+      const set = new Set((f.alterado || []).filter((p) => p !== a.periodo));
+      if (a.alterado) set.add(a.periodo);
+      f.alterado = [...set].sort();
+    };
+    const grp = _grupoDe(a.projeto_id, a.tipo_alocacao);
+    const leafProj = grp && grp.filhos.find((f) => f.alocacao_id === a.alocacao_id);
+    const pes = _pessoaRecursoDe(a.matricula);
+    const leafRec = pes && pes.filhos.find((f) => f.alocacao_id === a.alocacao_id);
+    // não deveria acontecer (ver docstring de impacto_edicao) — se acontecer, a
+    // célula fica sem atualizar visualmente sem erro nenhum aparecer; melhor um
+    // aviso alto no console do que falhar calado (2026-09-13).
+    if (!grp) console.warn("aplicarImpacto: grupo não encontrado", a);
+    else if (!leafProj) console.warn("aplicarImpacto: linha não encontrada em por_projeto", a);
+    if (!pes) console.warn("aplicarImpacto: pessoa não encontrada em por_recurso", a);
+    else if (!leafRec) console.warn("aplicarImpacto: linha não encontrada em por_recurso", a);
+    atualizaLeaf(leafProj);
+    atualizaLeaf(leafRec);
+  }
+
+  for (const g of impacto.grupos) {
+    const grp = _grupoDe(g.projeto_id, g.tipo_alocacao);
+    if (!grp) { console.warn("aplicarImpacto: grupo não encontrado (totais)", g); continue; }
+    _mergeTotais(grp.totais, tocados, g.totais);
+    grp.totais_alterado = _mergeAlterado(grp.totais_alterado, tocados, g.totais_alterado);
+    grp.modificado = grp.filhos.some((f) => f.novo || (f.alterado && f.alterado.length) || f.removido);
+  }
+
+  for (const p of impacto.projetos) {
+    const proj = S.estado.grade.por_projeto.find((pp) => pp.projeto_id === p.projeto_id);
+    if (!proj) { console.warn("aplicarImpacto: projeto não encontrado (totais)", p); continue; }
+    _mergeTotais(proj.totais, tocados, p.totais);
+    proj.totais_alterado = _mergeAlterado(proj.totais_alterado, tocados, p.totais_alterado);
+    proj.sujo = p.sujo;
+  }
+
+  for (const pe of impacto.pessoas) {
+    const pessoa = _pessoaRecursoDe(pe.matricula);
+    if (!pessoa) { console.warn("aplicarImpacto: pessoa não encontrada (totais)", pe); continue; }
+    _mergeTotais(pessoa.totais, tocados, pe.totais);
+    pessoa.totais_alterado = _mergeAlterado(pessoa.totais_alterado, tocados, pe.totais_alterado);
+    _mergeCores(pessoa.cores, tocados, pe.cores);
+    // a cor da pessoa pinta toda célula dela em QUALQUER projeto naquele mês —
+    // repinta cada linha dela mesmo fora do projeto tocado por esta edição.
+    for (const linha of pe.linhas_para_repintar) {
+      const g = _grupoDe(linha.projeto_id, linha.tipo_alocacao);
+      const leaf = g && g.filhos.find((f) => f.matricula === pe.matricula);
+      if (!leaf) console.warn("aplicarImpacto: linha pra repintar não encontrada", pe.matricula, linha);
+      else _mergeCores(leaf.cores, tocados, pe.cores);
+    }
+  }
+}
+
+// resolve a resposta de mes-lote/mes: caminho rápido (impacto) ou fallback
+// completo (estado) no caso raro de linha criada/removida — ver PERFORMANCE.md.
+function aplicarRespostaEdicao(resultado) {
+  if (resultado.impacto) aplicarImpacto(resultado.impacto);
+  else if (resultado.estado) S.estado = resultado.estado;
+}
+
 async function applyBatch(edits, { undoable = true } = {}) {
   if (!edits.length) return;
   if (undoable) {
@@ -462,25 +562,25 @@ async function applyBatch(edits, { undoable = true } = {}) {
     REDO.length = 0;
   }
   try {
-    S.estado = (await api.editarMesLote(edits.map(comIdent))).estado;
+    aplicarRespostaEdicao(await api.editarMesLote(edits.map(comIdent)));
     render();
-  } catch (err) { log(err.message, true); render(); }
+  } catch (err) { console.error("applyBatch:", err); log(err.message, true); render(); }
 }
 
 async function undo() {
   if (!UNDO.length) { log("nada para desfazer"); return; }
   const before = UNDO.pop();
   REDO.push(snapshot(before));
-  try { S.estado = (await api.editarMesLote(before)).estado; log("desfeito"); render(); }
-  catch (err) { log(err.message, true); render(); }
+  try { aplicarRespostaEdicao(await api.editarMesLote(before)); log("desfeito"); render(); }
+  catch (err) { console.error("undo:", err); log(err.message, true); render(); }
 }
 
 async function redo() {
   if (!REDO.length) { log("nada para refazer"); return; }
   const after = REDO.pop();
   UNDO.push(snapshot(after));
-  try { S.estado = (await api.editarMesLote(after)).estado; log("refeito"); render(); }
-  catch (err) { log(err.message, true); render(); }
+  try { aplicarRespostaEdicao(await api.editarMesLote(after)); log("refeito"); render(); }
+  catch (err) { console.error("redo:", err); log(err.message, true); render(); }
 }
 
 // -- menu de contexto: ajuste rápido de alocação (botão direito numa célula) --------

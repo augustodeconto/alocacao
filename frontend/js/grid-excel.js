@@ -91,7 +91,11 @@ class EG {
       const r = this.rows.length;
       label._rc = [r, 0];
       cells.forEach((td, c) => { if (td) td._rc = [r, c + 1]; });
-      this.rows.push({ label, cells, meta: tr.dataset.alocacaoId || null });
+      // Number() aqui, não string crua: dataset.* é sempre string, e o backend faz
+      // lookup em dict Python por alocacao_id puro em alguns caminhos (impacto de
+      // edição) onde "17253" != 17253 — sem isso, editar/ajustar via cellsPara()
+      // silenciosamente não aplicava nada (bug corrigido em 2026-09-12).
+      this.rows.push({ label, cells, meta: tr.dataset.alocacaoId ? Number(tr.dataset.alocacaoId) : null });
     }
     if (this.sel) {
       const R = this.rows.length;

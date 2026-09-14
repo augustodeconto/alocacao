@@ -19,7 +19,13 @@ branches + merge. `docs/TERMINOLOGIA.md` is the binding directive for vocabulary
 names may stay Git-flavored (`main`, `commit`, `branch`, `pessoa`), but user-facing UI text
 must use the mapped terms (commit→Versão, branch→Cenário, `main`→Principal, `BI`→Publicado,
 merge→Incorporar cenário, checkout→Abrir cenário, etc.) — see its §19 mapping table before
-writing or reviewing any UI copy in the Versões view.
+writing or reviewing any UI copy in the Versões view. `docs/PERFORMANCE.md` documents the
+incremental-response redesign (agreed, being implemented): the cell-edit hot path
+(`mes-lote`, `/mes`) should stop returning the full `_estado()` (~1.1MB, ~300ms) and
+instead return only the "impacted tree" (`aggregate.impacto_edicao`) — everything that
+depends on the edit (group/project/person totals, the person's cross-project color), never
+everything or just the raw new value. The other ~28 mutating routes keep full `_estado()`
+for now (deliberate, infrequent actions).
 
 ## Commands
 

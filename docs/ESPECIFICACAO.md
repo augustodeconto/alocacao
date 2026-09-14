@@ -593,6 +593,44 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-12** — **Bug corrigido: menu de ajuste rápido (botão direito) e
+  colar/arrastar/Delete paravam de funcionar depois da resposta incremental.**
+  `EG.cellsPara`/`meta` (`grid-excel.js`) sempre mandou `alocacao_id` como STRING
+  (vem de `dataset.alocacaoId`, HTML nunca converte) — o SQL sempre casou por
+  afinidade de tipo do SQLite, mas o `impacto_edicao` novo faz lookup num dict
+  Python chaveado pelo id puro (`"17253" != 17253`), então `alocacoes` vinha vazio
+  e a tela não aplicava nada, silenciosamente (sem erro visível). Corrigido nos dois
+  pontos: `grid-excel.js` converte `meta` pra `Number()` na origem (conserta colar/
+  arrastar/Delete/ajuste rápido de uma vez), e `main.py` (`editar_mes_lote`) também
+  normaliza `alocacao_id` cedo, como defesa na borda da API. Teste novo reproduz o
+  payload com `alocacao_id` como string e confirma `alocacoes` não vem vazio;
+  suíte completa (74) verde.
+- **2026-09-12** — **Diagnóstico de performance + desenho da resposta incremental**
+  ([`docs/PERFORMANCE.md`](PERFORMANCE.md)). Editar uma célula levava ~300-330ms porque
+  toda rota mutante devolve `_estado()` completo (as duas grades inteiras, ~1,1MB,
+  ~122 projetos/~269 pessoas) — medido direto no prod. Desenhada (implementação a seguir)
+  uma resposta incremental só pro caminho quente (`mes-lote`/`mes`): o backend calcula a
+  "árvore de impacto" de uma edição (grupo/projeto/pessoa tocados, mais a cor da pessoa
+  repintando linhas em outros projetos onde ela também está alocada no mesmo mês) e
+  devolve só isso — nunca tudo, nunca só o valor bruto. As demais ~28 rotas mutantes
+  continuam com `_estado()` completo (ações deliberadas, pouco frequentes).
+- **2026-09-12** — **Resposta incremental de edição implementada** (segue o desenho da
+  entrada anterior). `aggregate.impacto_edicao(conn, tocados)` — extraído `_diff_context`
+  de `build_grade` pra não duplicar a regra de "novo/alterado vs. baseline" entre os dois
+  caminhos. `PUT /api/alocacao/mes-lote` e `PUT /api/alocacao/{id}/mes` passam a devolver
+  `{"impacto": ...}` no caso comum (valor de célula numa linha que já existia e continua
+  existindo) — **escopo reduzido durante a implementação**: se a edição cria ou remove uma
+  `alocacao` por completo (caso raro — undo recriando linha zerada, ou zerar a última hora
+  dela), o endpoint cai pro `{"estado": _estado()}` de sempre, em vez de tentar corrigir a
+  árvore incremental por cima de uma mudança estrutural. Frontend: `aplicarImpacto()`
+  localiza os nós tocados dentro de `S.estado.grade` (por id/matrícula) e atualiza em
+  lugar, incluindo repintar linhas da mesma pessoa em outros projetos
+  (`linhas_para_repintar`); `applyBatch`/`undo`/`redo` (únicos consumidores de
+  `mes-lote` no cliente) passam por um `aplicarRespostaEdicao()` comum. Medido:
+  ~1085 bytes / ~40-70ms pro caso comum (era ~1,1MB / ~300-330ms). 5 testes novos em
+  `test_impacto_edicao.py` (inclui comparação direta contra `build_grade()` completo).
+  Gap conhecido, documentado em `docs/PERFORMANCE.md`: `tem_horas_no_periodo`/
+  `visivel_no_periodo` não são recalculados no patch incremental.
 - **2026-09-12** — **Nova operação `resetar(ref, commit_id)` (`git reset --soft`)
   + diálogo de bloqueio mais visível.** Nasceu de um caso real: consolidar por
   engano na branch errada e querer desfazer sem perder o conteúdo. `versao.resetar`

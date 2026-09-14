@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db as dbmod
 from . import versao
-from .aggregate import build_grade
+from .aggregate import build_grade, impacto_edicao
 from .templates import ensure_template
 from .xlsx_export import exportar_projeto, nome_arquivo_projeto
 from .xlsx_import import import_workbook, is_project_workbook
@@ -585,8 +585,19 @@ def editar_mes_lote(payload: dict = Body(...)):
     with _lock:
         zerados: set[int] = set()
         recriados: set[int] = set()
+        tocados: list[tuple[int, str]] = []
         for e in edits:
             aid = e.get("alocacao_id", e.get("alocacaoId"))
+            # normaliza cedo: o menu de ajuste rápido (grid-excel.js EG.cellsPara) manda
+            # alocacao_id como STRING (vem de dataset.alocacaoId, nunca convertido) — o
+            # SQL casa por afinidade de tipo do SQLite de qualquer jeito, mas
+            # `impacto_edicao` faz lookup em dict Python por `alocacao_id` puro, onde
+            # "17253" != 17253. Sem isso, o impacto vinha com `alocacoes` vazio e a
+            # tela não aplicava nada (bug real corrigido em 2026-09-12).
+            try:
+                aid = int(aid)
+            except (TypeError, ValueError):
+                continue
             periodo = str(e.get("periodo") or "")
             if len(periodo) == 7:
                 periodo += "-01"
@@ -636,15 +647,25 @@ def editar_mes_lote(payload: dict = Body(...)):
                 )
                 zerados.add(aid)
             _touch_projeto(row["projeto_id"])
+            tocados.append((aid, periodo))
         # alocação que ficou sem nenhum mês (zerada, ou recriada sem valor efetivo)
         # some do working
+        removidos: set[int] = set()
         for aid in zerados | recriados:
             if not _conn.execute(
                 "SELECT 1 FROM alocacao_mes WHERE alocacao_id=? LIMIT 1", (aid,)
             ).fetchone():
                 _conn.execute("DELETE FROM alocacao WHERE alocacao_id=?", (aid,))
+                removidos.add(aid)
         _conn.commit()
-        return {"estado": _estado()}
+        # Linha criada ou removida por esta edição = mudança ESTRUTURAL — a árvore
+        # de impacto incremental (docs/PERFORMANCE.md) só cobre valor de célula numa
+        # linha que já existia e continua existindo; nesse caso (mais raro: zerar a
+        # última hora de uma linha, ou digitar na primeira célula de uma linha nova)
+        # cai pro estado completo, que já lida com isso corretamente.
+        if recriados or removidos:
+            return {"estado": _estado()}
+        return {"impacto": impacto_edicao(_conn, tocados)}
 
 
 @app.put("/api/alocacao/{alocacao_id}/tipo")
@@ -1062,6 +1083,7 @@ def editar_mes(alocacao_id: int, payload: dict = Body(...)):
         # Edição livre: meses fora da janela configurada do projeto são aceitos
         # (aparecem tingidos na grade e entram no .xlsx no export).
         horas = _parse_valor(payload.get("valor"), row["cap"])
+        removido = False
         if horas > 0:
             _conn.execute(
                 "INSERT OR REPLACE INTO alocacao_mes (alocacao_id, periodo, horas) VALUES (?,?,?)",
@@ -1076,9 +1098,16 @@ def editar_mes(alocacao_id: int, payload: dict = Body(...)):
                 "SELECT 1 FROM alocacao_mes WHERE alocacao_id=? LIMIT 1", (alocacao_id,)
             ).fetchone():
                 _conn.execute("DELETE FROM alocacao WHERE alocacao_id=?", (alocacao_id,))
+                removido = True
         _touch_projeto(row["projeto_id"])
         _conn.commit()
-        return {"alocacao_id": alocacao_id, "periodo": periodo, "horas": horas, "estado": _estado()}
+        base = {"alocacao_id": alocacao_id, "periodo": periodo, "horas": horas}
+        # linha removida por esta edição = mudança estrutural, fora do escopo da
+        # árvore de impacto incremental (docs/PERFORMANCE.md) — mesma regra do
+        # mes-lote.
+        if removido:
+            return {**base, "estado": _estado()}
+        return {**base, "impacto": impacto_edicao(_conn, [(alocacao_id, periodo)])}
 
 
 # -- pessoa (cadastro de capacidade) ------------------------------------
