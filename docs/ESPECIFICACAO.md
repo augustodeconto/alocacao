@@ -593,6 +593,19 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-13** — **Hotfix: botões de nível (100/75/50/25/0%) do menu de ajuste
+  rápido separados de "Normalizar".** Achado: a correção de 2026-09-12 (Normalizar
+  ciente do total da pessoa em todos os projetos, pra não sugerir mais horas do que
+  cabe) foi aplicada aos 5 botões de nível também — resultado: se a pessoa já
+  estivesse em 100% da capacidade em OUTRO projeto naquele mês, os 5 níveis
+  sugeriam 0h **para qualquer percentual**, mesmo quando o usuário queria fixar
+  esta linha específica num valor de propósito (caso real: Parigot em 100% via
+  Annelida 3, tentando ajustar Annelida 2 pra 50% e recebendo 0h em todos os
+  níveis). Corrigido separando as duas contas: "Normalizar" continua ciente do
+  total (`alvoNormalizar`); os 5 níveis viraram um ajuste direto da própria linha
+  (`alvoNivel = cap × pct/100`, sem descontar outras alocações) — o usuário está
+  decidindo de propósito, não pedindo uma sugestão. Aplicado primeiro como hotfix
+  em `main`, depois trazido pra `develop` (mesmo bug, presente nos dois).
 - **2026-09-12** — **Bug corrigido: menu de ajuste rápido (botão direito) e
   colar/arrastar/Delete paravam de funcionar depois da resposta incremental.**
   `EG.cellsPara`/`meta` (`grid-excel.js`) sempre mandou `alocacao_id` como STRING
