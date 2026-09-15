@@ -593,6 +593,22 @@ Detecção pelo cabeçalho; nomes normalizados **sem acento**. Formas de carrega
 
 ## Histórico de mudanças
 
+- **2026-09-14** — **Hotfix: "até" do filtro de período excluía o próprio mês
+  escolhido; botão "+ mês" reaparecia e revelava dados escondidos além do limite.**
+  `<input type="month">` manda `"YYYY-MM"` sem dia; comparando direto contra
+  `periodo` (sempre `"YYYY-MM-01"`), `periodo <= "2026-07"` é `False` pra
+  `periodo="2026-07-01"` (comparação de string: prefixo mais curto compara como
+  "menor") — "até dezembro/27" na prática cortava em novembro. `aggregate.
+  _normaliza_periodo` completa `"-01"` antes de qualquer comparação
+  (`periodo_inicial`/`periodo_final`, dentro de `build_grade`). Como efeito
+  colateral, o botão "+ mês" (que soma meses arbitrariamente no cliente,
+  `computePeriodos`) acabava "revelando" o mês real que estava sendo cortado
+  por engano, com valores já preenchidos — parecia :uma coluna nova, mas era
+  dado escondido. Corrigido também: com um "até" fechado configurado, o "+" nem
+  aparece mais (não existe mês extra válido pra adicionar além de um limite que
+  o próprio usuário fixou) e `computePeriodos` ignora `extraTail` residual
+  nesse caso. Teste novo em `test_aggregate.py`; suíte completa (69) verde.
+  Aplicado em `main` e trazido pra `develop`.
 - **2026-09-13** — **Hotfix: botões de nível (100/75/50/25/0%) do menu de ajuste
   rápido separados de "Normalizar".** Achado: a correção de 2026-09-12 (Normalizar
   ciente do total da pessoa em todos os projetos, pra não sugerir mais horas do que
