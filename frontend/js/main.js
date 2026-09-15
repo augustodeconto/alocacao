@@ -48,6 +48,11 @@ function addMonthISO(iso, n) {
 
 function computePeriodos() {
   const base = (S.estado.grade.periodos || []).slice();
+  // "até" fechado (não aberto): a janela já veio certinha do servidor até esse mês
+  // inclusive — não tem mês "extra" válido pra acrescentar além dele. Ignora
+  // qualquer S.extraTail residual de antes do filtro ter sido fechado (senão a
+  // coluna extra reaparece sozinha e o "até" deixa de ser um limite de verdade).
+  if (S.estado.grade.periodo_final) return base;
   let tail = base.length ? base[base.length - 1] : currentMonthISO();
   for (let i = 0; i < S.extraTail; i++) {
     tail = addMonthISO(tail, 1);
@@ -125,10 +130,15 @@ function headerRow(periodos, titulo) {
     const cls = "month" + (CONFIGURED.has(p) ? "" : " extra");
     tr.append(el("th", { className: cls, dataset: { periodo: p } }, fmtMes(p)));
   }
-  // "+ mês": coluna extra no fim — ao clicar, nasce um mês e o botão anda pra direita
-  tr.append(el("th", { className: "mes-add" },
-    el("button", { title: "acrescentar mês ao final", textContent: "＋",
-      onclick: () => { S.extraTail++; render(); } })));
+  // "+ mês": coluna extra no fim — ao clicar, nasce um mês e o botão anda pra direita.
+  // Só faz sentido quando "até" está aberto — com um limite fechado configurado,
+  // a janela já vai até lá inclusive e não existe "mês extra" válido pra adicionar
+  // (ver computePeriodos).
+  if (!S.estado.grade.periodo_final) {
+    tr.append(el("th", { className: "mes-add" },
+      el("button", { title: "acrescentar mês ao final", textContent: "＋",
+        onclick: () => { S.extraTail++; render(); } })));
+  }
   return el("thead", {}, tr);
 }
 
@@ -697,8 +707,10 @@ function abrirPeriodoCtx(ev) {
   const ini = $("#periodo-inicial-inp");
   const fim = $("#periodo-final-inp");
   chk.checked = g.periodo_ativo;
-  ini.value = g.periodo_inicial || "";
-  fim.value = g.periodo_final || "";
+  // <input type="month"> só aceita/mostra "YYYY-MM" (sem dia) — o servidor sempre
+  // manda "YYYY-MM-01" completo.
+  ini.value = (g.periodo_inicial || "").slice(0, 7);
+  fim.value = (g.periodo_final || "").slice(0, 7);
   ini.disabled = fim.disabled = !g.periodo_ativo;
 
   chk.onchange = async () => {
@@ -707,8 +719,11 @@ function abrirPeriodoCtx(ev) {
     try { S.estado = await api.estado(); render(); } catch (err) { log(err.message, true); }
   };
   const aplicarDatas = async () => {
-    setPeriodoInicial(ini.value);
-    setPeriodoFinal(fim.value);
+    // sempre volta pra "YYYY-MM-01" ao salvar — ver aggregate._normaliza_periodo:
+    // mandar "YYYY-MM" cru fazia "até" excluir o próprio mês escolhido (bug
+    // corrigido em 2026-09-14).
+    setPeriodoInicial(ini.value ? ini.value + "-01" : "");
+    setPeriodoFinal(fim.value ? fim.value + "-01" : "");
     try { S.estado = await api.estado(); render(); } catch (err) { log(err.message, true); }
   };
   ini.onchange = aplicarDatas;

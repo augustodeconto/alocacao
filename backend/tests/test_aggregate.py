@@ -3,6 +3,20 @@ from app.aggregate import build_grade, cor_pessoa_mes
 from app.xlsx_import import import_workbook
 
 
+def test_periodo_final_sem_dia_e_intervalo_fechado(conn, sample_path):
+    """Bug corrigido em 2026-09-14: `<input type="month">` manda 'YYYY-MM' sem dia —
+    comparar direto (`periodo <= '2026-07'`) excluía o próprio mês final, porque
+    '2026-07-01' > '2026-07' na comparação de string (prefixo mais curto compara como
+    "menor"). "Até" tem que ser um intervalo fechado de verdade: o mês escolhido
+    precisa aparecer, não só os anteriores a ele."""
+    import_workbook(conn, sample_path)
+    g = build_grade(conn, periodo_inicial="2026-05", periodo_final="2026-07")
+    assert g["periodo_inicial"] == "2026-05-01"   # normalizado, mesmo sem dia na entrada
+    assert g["periodo_final"] == "2026-07-01"
+    assert "2026-07-01" in g["periodos"]          # o próprio mês final aparece
+    assert all(p <= "2026-07-01" for p in g["periodos"])
+
+
 def test_cor_sobre_e_subalocacao(conn, sample_path):
     import_workbook(conn, sample_path)
     # Augusto soma em 07/26 = 88 (só TecnicaANP). Sem capacidade -> sem cor.

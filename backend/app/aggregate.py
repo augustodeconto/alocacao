@@ -5,6 +5,18 @@ import datetime as _dt
 import sqlite3
 
 
+def _normaliza_periodo(p: str | None) -> str | None:
+    """`'YYYY-MM'` (o que `<input type="month">` manda, sem dia) -> `'YYYY-MM-01'`.
+    Bug corrigido em 2026-09-14: sem isso, a comparação de string `periodo <= p`
+    exclui o próprio mês de `p` — `'2027-12-01' <= '2027-12'` é `False` (string mais
+    curta e prefixo compara como "menor"), então "até dez/27" na prática cortava em
+    novembro. Pro início não dava pra notar por acidente (`>=` funciona do jeito
+    errado só quando o valor é usado como limite superior, não inferior)."""
+    if p and len(p) == 7:
+        return p + "-01"
+    return p
+
+
 def periodos_union(
     conn: sqlite3.Connection, periodo_inicial: str | None = None, periodo_final: str | None = None
 ) -> list[str]:
@@ -133,6 +145,8 @@ def build_grade(
     um parâmetro à parte, e não apenas `periodo_inicial=None` (que continua significando
     "não veio nada do cliente, usa o padrão de hoje")."""
     hoje = _dt.date.today().replace(day=1).isoformat()
+    periodo_inicial = _normaliza_periodo(periodo_inicial)
+    periodo_final = _normaliza_periodo(periodo_final)
     if periodo_ativo:
         periodo_inicial = periodo_inicial or hoje
     else:
