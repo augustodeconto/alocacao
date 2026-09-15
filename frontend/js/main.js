@@ -517,29 +517,31 @@ function abrirAjusteAlocacao(cells, ev) {
     .filter((c) => c.cap);
   if (!validas.length) return;   // ninguém na seleção tem capacidade cadastrada
 
-  // Bug corrigido em 2026-09-12: "normalizar"/100%/75%... tratava a célula como se
-  // fosse a ÚNICA alocação da pessoa naquele mês, sugerindo cap*pct mesmo quando ela
-  // já tinha outras alocações ocupando parte da capacidade — resultado: sugeria
-  // completar pra 100% uma pessoa que já estava em 100% (ou mais) somando tudo.
-  // `outras` = tudo que já é dela naquele mês FORA desta célula; o alvo desta célula
-  // é o que falta pra fechar `cap*pct/100` no TOTAL da pessoa, nunca negativo.
+  // "Normalizar" (100%) é CIENTE do total da pessoa em TODOS os projetos — completa
+  // só o que falta pra fechar 100% no total dela, nunca sugere passar disso (corrigido
+  // em 2026-09-12: antes sugeria cap inteiro mesmo com outras alocações já ocupando a
+  // capacidade). `outras` = tudo que já é dela naquele mês FORA desta célula.
   const outras = (c) => totalPessoaNoMes(c.matricula, c.periodo) - horasAtual(c.alocacaoId, c.periodo);
-  const alvo = (c, pct) => Math.max(0, Math.round(c.cap * pct / 100 - outras(c)));
+  const alvoNormalizar = (c) => Math.max(0, Math.round(c.cap - outras(c)));
 
-  // DIAGNÓSTICO TEMPORÁRIO (2026-09-12) — bug relatado: níveis mostram os mesmos
-  // valores em células/pessoas diferentes. Tirar assim que reproduzir com o console
-  // aberto e identificar onde diverge (ver mensagem cross-session de alocacao-9d).
-  console.log("abrirAjusteAlocacao debug:", validas.map((c) => ({
-    alocacaoId: c.alocacaoId, periodo: c.periodo, matricula: c.matricula, cap: c.cap,
-    horasAtualDestaCelula: horasAtual(c.alocacaoId, c.periodo),
-    totalPessoaNoMes: totalPessoaNoMes(c.matricula, c.periodo),
-    outras: outras(c),
-  })));
+  // Os botões de nível (100/75/50/25/0%) são um ajuste DIRETO desta linha — o
+  // usuário está decidindo de propósito quanto ela vale, então (diferente de
+  // "Normalizar") NÃO descontam outras alocações da pessoa. Bug corrigido em
+  // 2026-09-13: usar a conta ciente-do-total aqui também fazia os níveis sempre
+  // sugerirem 0h quando a pessoa já estava em 100% em OUTRO projeto, mesmo
+  // quando o usuário queria fixar esta linha num valor específico de propósito.
+  const alvoNivel = (c, pct) => Math.max(0, Math.round(c.cap * pct / 100));
 
-  const aplicar = async (pct) => {
+  const aplicarNormalizar = async () => {
     const edits = validas.map((c) => ({
-      alocacao_id: c.alocacaoId, periodo: c.periodo,
-      valor: String(alvo(c, pct)),
+      alocacao_id: c.alocacaoId, periodo: c.periodo, valor: String(alvoNormalizar(c)),
+    }));
+    hideAlocCtx();
+    await applyBatch(edits);
+  };
+  const aplicarNivel = async (pct) => {
+    const edits = validas.map((c) => ({
+      alocacao_id: c.alocacaoId, periodo: c.periodo, valor: String(alvoNivel(c, pct)),
     }));
     hideAlocCtx();
     await applyBatch(edits);
@@ -548,7 +550,7 @@ function abrirAjusteAlocacao(cells, ev) {
   // "(+35h)" no botão de normalizar: quanto ESTA linha precisa mudar pra fechar o
   // total da pessoa em 100% da capacidade naquele mês (considerando as outras
   // alocações dela) — mesmo delta pra todo mundo na seleção, ou "vários" se variar.
-  const deltas = validas.map((c) => alvo(c, 100) - horasAtual(c.alocacaoId, c.periodo));
+  const deltas = validas.map((c) => alvoNormalizar(c) - horasAtual(c.alocacaoId, c.periodo));
   const deltaTxt = new Set(deltas).size === 1 ? `${deltas[0] > 0 ? "+" : ""}${deltas[0]}h` : "vários";
   // já está em 100% (somando tudo) pra toda a seleção -> normalizar seria um no-op.
   const jaNormalizado = deltas.every((d) => d === 0);
@@ -556,9 +558,10 @@ function abrirAjusteAlocacao(cells, ev) {
   const m = $("#aloc-ctx");
   m.innerHTML = "";
   const btnNorm = el("button", {
-    className: "aloc-normalizar", title: "Ajustar para alocação plena (100%)",
+    className: "aloc-normalizar",
+    title: "Ajusta para alocação plena (100% do total da pessoa, considerando outras alocações dela)",
     disabled: jaNormalizado,
-    onclick: () => aplicar(100),
+    onclick: aplicarNormalizar,
   });
   // quebra fixa em 2 linhas de propósito — sem isso, a largura do "(+35h)"/"(0h)"
   // varia e às vezes deixa "Normalizar alocação" numa linha só, às vezes quebra;
@@ -569,11 +572,14 @@ function abrirAjusteAlocacao(cells, ev) {
 
   const row = el("div", { className: "aloc-niveis" });
   for (const pct of ALOC_CTX_NIVEIS) {
-    const alvos = validas.map((c) => alvo(c, pct));
+    const alvos = validas.map((c) => alvoNivel(c, pct));
     const alvosIguais = new Set(alvos).size === 1;
     const rotulo = S.displayUnit === "pct" ? `${pct}%`
       : alvosIguais ? `${alvos[0]}h` : `${pct}%`;
-    const btn = el("button", { onclick: () => aplicar(pct) });
+    const btn = el("button", {
+      title: "Define esta linha diretamente — não desconta outras alocações da pessoa",
+      onclick: () => aplicarNivel(pct),
+    });
     btn.innerHTML = `${_iconNivel(pct / 100)}<span>${rotulo}</span>`;
     row.append(btn);
   }
